@@ -202,6 +202,9 @@ export const holdings = sqliteTable(
     liabilityCategory: text("liability_category"),
     /** 本家互換 */
     isActive: integer("is_active", { mode: "boolean" }).default(true),
+    /** 本家互換（nullable 追加。本家は notNull） */
+    createdAt: text("created_at"),
+    updatedAt: text("updated_at"),
     quantity: real("quantity").notNull(),
     value: real("value").notNull(),
     averagePrice: real("average_price"),

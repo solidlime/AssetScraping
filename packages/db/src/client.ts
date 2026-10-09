@@ -11,6 +11,12 @@ export { schema };
 
 export type Database = BetterSQLite3Database<typeof schema>;
 
+// 本家 mf-dashboard 互換エイリアス（queries/repositories の移植元が参照する名前）
+export const getDb = createDb;
+export type Db = Database;
+export type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type DbExecutor = Db | DbTransaction;
+
 export interface CreateDbOptions {
   /** DB ファイルパス。既定: /data/asset-scraping.db (Docker) / ./.data/dev.db (ホスト) */
   path?: string;

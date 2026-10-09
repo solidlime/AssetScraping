@@ -16,6 +16,7 @@
     "db:migrate": "tsx src/scripts/migrate.ts"
   },
   "dependencies": {
+    "@asset-scraping/date-utils": "workspace:*",
     "@asset-scraping/shared": "workspace:*",
     "better-sqlite3": "^11.8.1",
     "drizzle-orm": "^0.39.1"

@@ -6,7 +6,7 @@ import type {
   Holding,
   Transaction,
 } from "@asset-scraping/shared";
-import { desc, eq, gte, isNotNull, sql } from "drizzle-orm";
+import { desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import type { Database } from "./client.ts";
 import {
   accounts,
@@ -37,13 +37,16 @@ export interface UpsertAccountInput {
 export function upsertAccount(db: Database, input: UpsertAccountInput): void {
   const ts = nowIso();
   db.insert(accounts)
-    .values({ ...input, createdAt: ts, updatedAt: ts })
+    // 本家互換列 mfId に ssnb 口座 ID（= 現行 PK id）を同時投入する。
+    // 本家準拠 queries は accounts.mfId を参照するため。
+    .values({ ...input, mfId: input.id, createdAt: ts, updatedAt: ts })
     .onConflictDoUpdate({
       target: accounts.id,
       set: {
         name: input.name,
         institution: input.institution,
         category: input.category,
+        mfId: input.id,
         updatedAt: ts,
       },
     })
@@ -51,17 +54,29 @@ export function upsertAccount(db: Database, input: UpsertAccountInput): void {
 }
 
 export function upsertAccountStatus(db: Database, input: AccountStatus): void {
+  const ts = nowIso();
+  // 本家互換の派生列: status="ok" / lastUpdated=scrapedAt / totalAssets=balance。
+  // 本家準拠 queries は status/lastUpdated/totalAssets を参照するため。
   db.insert(accountStatuses)
     .values({
       accountId: input.accountId,
       balance: input.balance,
       scrapedAt: input.scrapedAt,
+      status: "ok",
+      lastUpdated: input.scrapedAt,
+      totalAssets: Math.round(input.balance),
+      createdAt: ts,
+      updatedAt: ts,
     })
     .onConflictDoUpdate({
       target: accountStatuses.accountId,
       set: {
         balance: input.balance,
         scrapedAt: input.scrapedAt,
+        status: "ok",
+        lastUpdated: input.scrapedAt,
+        totalAssets: Math.round(input.balance),
+        updatedAt: ts,
       },
     })
     .run();
@@ -71,17 +86,19 @@ export function upsertDailySnapshot(
   db: Database,
   input: { accountId: string; date: string; balance: number },
 ): void {
+  const ts = nowIso();
   db.insert(dailySnapshots)
-    .values(input)
+    .values({ ...input, createdAt: ts, updatedAt: ts })
     .onConflictDoUpdate({
       target: [dailySnapshots.accountId, dailySnapshots.date],
-      set: { balance: input.balance },
+      set: { balance: input.balance, updatedAt: ts },
     })
     .run();
 }
 
 export function upsertHoldings(db: Database, rows: Holding[]): void {
   if (rows.length === 0) return;
+  const ts = nowIso();
   db.transaction((tx) => {
     for (const h of rows) {
       tx.insert(holdings)
@@ -93,6 +110,8 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
           averagePrice: h.averagePrice,
           unrealizedGain: h.unrealizedGain,
           scrapedAt: h.scrapedAt,
+          createdAt: ts,
+          updatedAt: ts,
         })
         .onConflictDoUpdate({
           target: [holdings.accountId, holdings.name],
@@ -102,6 +121,7 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
             averagePrice: h.averagePrice,
             unrealizedGain: h.unrealizedGain,
             scrapedAt: h.scrapedAt,
+            updatedAt: ts,
           },
         })
         .run();
@@ -114,17 +134,34 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
   const ts = nowIso();
   db.transaction((tx) => {
     for (const t of rows) {
+      // 本家準拠: transactions.amount は常に正値、type で収支を区別する。
+      // crawler 由来の符号はここで吸収し、読み出し側（getTransactions）で逆符号化する。
+      const amount = Math.abs(t.amount);
+      const type = t.amount >= 0 ? "income" : "expense";
       tx.insert(transactions)
         .values({
           externalId: t.externalId,
+          mfId: t.externalId,
           accountId: t.accountId,
           date: t.date,
           description: t.description,
-          amount: t.amount,
+          amount,
           category: t.category,
+          type,
+          isTransfer: false,
+          isExcludedFromCalculation: false,
           createdAt: ts,
+          updatedAt: ts,
         })
-        .onConflictDoNothing()
+        .onConflictDoUpdate({
+          target: [transactions.accountId, transactions.externalId],
+          set: {
+            amount,
+            category: t.category,
+            type,
+            updatedAt: ts,
+          },
+        })
         .run();
     }
   });
@@ -138,11 +175,46 @@ export function upsertAssetHistory(db: Database, rows: AssetHistoryPoint[]): voi
         .values(p)
         .onConflictDoUpdate({
           target: [assetHistory.date, assetHistory.category],
-          set: { value: p.value },
+          set: { value: p.value, updatedAt: nowIso() },
         })
         .run();
     }
   });
+
+  // 本家互換の派生列: 同日の totalAssets（カテゴリ合計）と change（前日比）を
+  // 各日付行に一括反映する。本家準拠 queries はこの列を参照する。
+  const touched = [...new Set(rows.map((r) => r.date))].sort();
+  for (const date of touched) {
+    const dayRows = db
+      .select({ value: assetHistory.value })
+      .from(assetHistory)
+      .where(eq(assetHistory.date, date))
+      .all();
+    const totalAssets = Math.round(dayRows.reduce((sum, r) => sum + r.value, 0));
+
+    const prevDayRow = db
+      .select({ date: assetHistory.date })
+      .from(assetHistory)
+      .where(lt(assetHistory.date, date))
+      .orderBy(desc(assetHistory.date))
+      .limit(1)
+      .get();
+    const prevTotal = prevDayRow
+      ? db
+          .select({ value: assetHistory.value })
+          .from(assetHistory)
+          .where(eq(assetHistory.date, prevDayRow.date))
+          .all()
+          .reduce((sum, r) => sum + r.value, 0)
+      : null;
+    const change = prevTotal === null ? null : totalAssets - Math.round(prevTotal);
+
+    db
+      .update(assetHistory)
+      .set({ totalAssets, change, updatedAt: nowIso() })
+      .where(eq(assetHistory.date, date))
+      .run();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -205,13 +277,22 @@ export function getTransactions(
       description: transactions.description,
       amount: transactions.amount,
       category: transactions.category,
+      type: transactions.type,
     })
     .from(transactions)
     .orderBy(desc(transactions.date), desc(transactions.id));
   const rows = (opts.since ? base.where(gte(transactions.date, opts.since)) : base)
     .limit(opts.limit ?? 500)
     .all();
-  return rows;
+  // upsertTransactions は本家準拠で正値+type 保管するため、legacy API は符号付き金額に逆符号化する
+  return rows.map((t) => ({
+    externalId: t.externalId,
+    accountId: t.accountId,
+    date: t.date,
+    description: t.description,
+    amount: t.type === "expense" ? -t.amount : t.amount,
+    category: t.category,
+  }));
 }
 
 export function getAssetHistory(
@@ -246,8 +327,8 @@ export function getMonthlySummary(
   const rows = db
     .select({
       month: sql<string>`strftime('%Y-%m', ${transactions.date})`.as("month"),
-      income: sql<number>`coalesce(sum(case when ${transactions.amount} > 0 then ${transactions.amount} else 0 end), 0)`,
-      expense: sql<number>`coalesce(sum(case when ${transactions.amount} < 0 then -${transactions.amount} else 0 end), 0)`,
+      income: sql<number>`coalesce(sum(case when ${transactions.type} = 'income' then ${transactions.amount} else 0 end), 0)`,
+      expense: sql<number>`coalesce(sum(case when ${transactions.type} = 'expense' then ${transactions.amount} else 0 end), 0)`,
     })
     .from(transactions)
     .groupBy(sql`strftime('%Y-%m', ${transactions.date})`)
