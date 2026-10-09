@@ -7,6 +7,7 @@ import type {
   Transaction,
 } from "@asset-scraping/shared";
 import { and, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { categorizeDbTransaction } from "./shared/categorize.ts";
 import type { Database } from "./client.ts";
 import {
   accounts,
@@ -252,6 +253,12 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
       // crawler 由来の符号はここで吸収し、読み出し側（getTransactions）で逆符号化する。
       const amount = Math.abs(t.amount);
       const type = t.amount >= 0 ? "income" : "expense";
+      // ssnb に大項目・中項目が無い行は内容ベース推定で補完する（crawler categorize.ts
+      // と同じ本家 seed カテゴリ体系。db 側に重複実装しないため、
+      // crawler 側がすでに推定済みなら t.category / t.subCategory を優先する）。
+      const fallback = t.category === null ? categorizeDbTransaction(t.description) : null;
+      const category = t.category ?? fallback?.category ?? null;
+      const subCategory = t.subCategory ?? fallback?.subCategory ?? null;
       tx.insert(transactions)
         .values({
           externalId: t.externalId,
@@ -260,7 +267,8 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
           date: t.date,
           description: t.description,
           amount,
-          category: t.category,
+          category,
+          subCategory,
           type,
           isTransfer: false,
           isExcludedFromCalculation: false,
@@ -271,7 +279,8 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
           target: [transactions.accountId, transactions.externalId],
           set: {
             amount,
-            category: t.category,
+            category,
+            subCategory,
             type,
             updatedAt: ts,
           },

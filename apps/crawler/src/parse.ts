@@ -18,6 +18,7 @@ import type {
   Transaction,
 } from "@asset-scraping/shared";
 import { ACCOUNT_CATEGORIES } from "@asset-scraping/shared";
+import { categorizeTransaction } from "./categorize.js";
 import { parse } from "node-html-parser";
 
 export class ScrapeParseError extends Error {
@@ -352,8 +353,12 @@ export function parseTransactions(html: string, accountId: string, now: Date = n
     if (amount === null) continue;
     const major = cellText(tds[majorIdx]);
     const minor = cellText(tds[minorIdx]);
-    const category = [major, minor].filter(Boolean).join(" / ") || null;
-    txs.push({ externalId: null, accountId, date, description, amount, category });
+    // 大項目・中項目が無い行は内容ベース推定（本家 seed カテゴリ体系）で補完する。
+    // 判定不能は null（web 側の未分類/その他扱い）。
+    const estimated = categorizeTransaction(description);
+    const category = [major, minor].filter(Boolean).join(" / ") || estimated?.category || null;
+    const subCategory = estimated?.subCategory ?? null;
+    txs.push({ externalId: null, accountId, date, description, amount, category, subCategory });
   }
   return txs;
 }

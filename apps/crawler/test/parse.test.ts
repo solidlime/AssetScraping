@@ -239,6 +239,7 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         description: "スーパー",
         amount: -22000,
         category: "食費 / 食料品",
+        subCategory: "食料品",
       },
       {
         externalId: null,
@@ -247,6 +248,7 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         description: "給与",
         amount: 300000,
         category: "収入 / 給与",
+        subCategory: "給与",
       },
       {
         externalId: null,
@@ -255,6 +257,7 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         description: "口座間振替",
         amount: -50000,
         category: null,
+        subCategory: null,
       },
     ]);
   });

@@ -81,6 +81,8 @@ export interface Transaction {
   /** 出金は負の値に正規化 */
   amount: number;
   category: string | null;
+  /** 本家中項目相当。ssnb に列が無いため crawler 側推定（categorizeTransaction）で補う */
+  subCategory?: string | null;
 }
 
 /** スクレイプ実行結果の統計 */
