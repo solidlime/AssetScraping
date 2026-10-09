@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+@theme {
+  /* === Base theme (本家 mf-dashboard 準拠) === */
+  --color-background: oklch(0.98 0.005 230);
+  --color-foreground: oklch(0.18 0.02 230);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.18 0.02 230);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.18 0.02 230);
+  --color-primary: oklch(0.53 0.15 230);
+  --color-primary-foreground: oklch(1 0 0);
+  --color-secondary: oklch(0.96 0.01 230);
+  --color-secondary-foreground: oklch(0.25 0.02 230);
+  --color-muted: oklch(0.96 0.01 230);
+  --color-muted-foreground: oklch(0.5 0.02 230);
+  --color-accent: oklch(0.92 0.04 230);
+  --color-accent-foreground: oklch(0.25 0.02 230);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-destructive-foreground: oklch(0.985 0 0);
+  --color-border: oklch(0.91 0.02 230);
+  --color-input: oklch(0.91 0.02 230);
+  --color-ring: oklch(0.53 0.15 230);
+
+  /* === Radius === */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  /* === Chart palette === */
+  --color-chart-1: oklch(0.53 0.15 230);
+  --color-chart-2: oklch(0.65 0.18 145);
+  --color-chart-3: oklch(0.7 0.18 45);
+  --color-chart-4: oklch(0.6 0.2 25);
+  --color-chart-5: oklch(0.6 0.2 300);
+
+  /* === Semantic colors (収入=青系 / 支出・下落=赤系) === */
+  --color-income: #256a82;
+  --color-expense: #b91c1c;
+  --color-balance-positive: #146e35;
+  --color-balance-negative: #9c3f00;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
