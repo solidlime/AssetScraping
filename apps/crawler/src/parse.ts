@@ -162,13 +162,16 @@ export function resolveHoldingsColumns(headers: string[]): HoldingsColumns {
     headers.findIndex((h) => labels.includes(h));
   const name = indexOf(["種類・名称", "名称", "銘柄"]);
   if (name < 0) return NONE;
-  // 金額列: 残高があれば優先、無ければ 評価額（pns 形）
-  const balance = headers.indexOf("残高");
-  const evaluation = headers.indexOf("評価額");
-  const value = balance >= 0 ? balance : evaluation;
+  // 金額列: 残高があれば優先、無ければ 評価額 / 現在価値（pns 形実測 2026-10）
+  const valueLabels = ["残高", "評価額", "現在価値"];
+  let value = -1;
+  for (const label of valueLabels) {
+    const i = headers.indexOf(label);
+    if (i >= 0 && (value < 0 || i < value)) value = i;
+  }
   if (value < 0) return NONE;
   const quantity = headers.findIndex((h) => h === "数量");
-  const avgCost = indexOf(["平均取得価格"]);
+  const avgCost = indexOf(["平均取得価格", "取得価額"]);
   // 評価損益: pns/eq 形で「含み損益」または「評価損益」の列
   const gain = indexOf(["含み損益", "評価損益"]);
   return {

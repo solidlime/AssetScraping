@@ -181,6 +181,36 @@ describe("parseHoldings（/accounts/show/{id} の「種類・名称」テーブ�
     expect(holdings.map((h) => h.name)).toEqual(["米ドル 現金", "現金（AI投資）"]);
     expect(holdings.map((h) => h.value)).toEqual([35713, 2446]);
   });
+
+  it("実測（ssnb /accounts/show NRK・SBIベネフィット）の「現在価値/取得価額/評価損益」ヘッダを parse する", () => {
+    const html = `
+    <table>
+      <thead><tr><th>名称</th><th>取得価額</th><th>現在価値</th><th>評価損益</th><th>評価損益率</th><th>取得日</th></tr></thead>
+      <tbody>
+        <tr><td>三菱UFJ DC海外株式インデックスファンド</td><td>150,812円</td><td>328,143円</td><td>177,331円</td><td>117.58%</td><td></td></tr>
+      </tbody>
+    </table>`;
+    const holdings = parseHoldings(html, "nrk-1");
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0]).toMatchObject({
+      name: "三菱UFJ DC海外株式インデックスファンド",
+      value: 328143,
+      averagePrice: 150812,
+      unrealizedGain: 177331,
+    });
+  });
+
+  it("実測（楽天証券・Zaif）の「名称/種類/番号/残高」テーブルで残高が '-' の行は skip する", () => {
+    const html = `
+    <table>
+      <thead><tr><th>名称</th><th>種類</th><th>番号</th><th>残高</th></tr></thead>
+      <tbody>
+        <tr><td></td><td>金・プラチナ</td><td></td><td>-</td></tr>
+        <tr><td></td><td>証券口座</td><td></td><td>-</td></tr>
+      </tbody>
+    </table>`;
+    expect(parseHoldings(html, "rkt-1")).toEqual([]);
+  });
 });
 
 describe("parseAssetHistory（/bs/history の資産推移テーブル）", () => {
