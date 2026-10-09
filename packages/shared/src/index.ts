@@ -45,6 +45,13 @@ export interface AccountStatus {
   balance: number;
   /** 取得日時 (ISO 8601, UTC) */
   scrapedAt: string;
+  /**
+   * ssnb 的口座行的更新状態判定（本家 mfIdAccountStatus 语彙）。
+   * 検出不能（正常）は undefined。db 側で既定 "ok" 扱いにする。
+   */
+  status?: "ok" | "error" | "updating" | "suspended";
+  /** 判定根拠となった行テキスト（エラー時の表示用） */
+  statusText?: string;
 }
 
 /** 保有資産（銘柄・数量・評価額・含み損益） */
