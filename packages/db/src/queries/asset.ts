@@ -101,20 +101,34 @@ export async function getAssetHistoryByDay(
 
 /**
  * カテゴリ別資産内訳を取得（本家 getAssetBreakdownByCategory 相当）
- * asset_history_categories の代わりに現行 asset_history の最新日行から取得
+ * 本家は最新 asset_history の asset_history_categories（categoryName は
+ * holdings の assetCategory・本家語彙）を返すため、現行も同値の
+ * holdings.categoryId → categoryName 駆動に統一する。
+ * （日×カテゴリ行の asset_history は口座コード語彙のため、ここでの集計には使わない）
  */
+export function aggregateAssetsByCategory(
+  holdings: Array<{ type: string; categoryName: string | null; amount: number | null }>,
+) {
+  const breakdown: Record<string, number> = {};
+
+  for (const holding of holdings) {
+    if (holding.type === "asset" && holding.amount) {
+      const category = holding.categoryName || "その他";
+      breakdown[category] = (breakdown[category] || 0) + holding.amount;
+    }
+  }
+
+  return Object.entries(breakdown)
+    .map(([category, amount]) => ({ category, amount }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
 export async function getAssetBreakdownByCategory(
-  _groupIdParam?: string,
+  groupIdParam?: string,
   db: Db = getDb(),
 ) {
-  const days = await getAssetHistoryByDay(db);
-  const latest = days[days.length - 1];
-  if (!latest) return [];
-
-  return latest.categories
-    .filter((c) => c.amount > 0)
-    .map((c) => ({ category: c.categoryName, amount: c.amount }))
-    .sort((a, b) => b.amount - a.amount);
+  const holdings = await getHoldingsWithLatestValues(groupIdParam, db);
+  return aggregateAssetsByCategory(holdings);
 }
 
 /**

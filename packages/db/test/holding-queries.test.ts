@@ -21,6 +21,7 @@ import {
   getHoldingsWithLatestValues,
   hasInvestmentHoldings,
 } from "../src/queries/holding.js";
+import { getAssetBreakdownByCategory } from "../src/queries/asset.js";
 
 type DB = BetterSQLite3Database<typeof schema>;
 
@@ -106,5 +107,14 @@ describe("holding queries（口座別 snapshot）", () => {
     expect(deposit).toMatchObject({ amount: 35, categoryName: "預金・現金" });
 
     expect(await hasInvestmentHoldings(undefined, db)).toBe(true);
+
+    // /bs バランスシートのカテゴリ内訳（監査指摘③）:
+    // 本家 getAssetBreakdownByCategory は holdings の assetCategory（本家語彙）駆動。
+    // 英語コード（bank/securities…）を返す現行実装では web 側の語彙・色マップで崩壖していた。
+    const breakdown = await getAssetBreakdownByCategory(undefined, db);
+    expect(breakdown).toEqual([
+      { category: "投資信託", amount: 110000 },
+      { category: "預金・現金", amount: 35 },
+    ]);
   });
 });

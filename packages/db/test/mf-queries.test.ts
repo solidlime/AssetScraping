@@ -233,10 +233,9 @@ describe("本家互換 queries/repositories 結線", () => {
     });
 
     const breakdown = await getAssetBreakdownByCategory(undefined, db);
-    expect(breakdown).toEqual([
-      { category: "securities", amount: 400000 },
-      { category: "bank", amount: 223457 },
-    ]);
+    // 本家互換: breakdown は holdings の assetCategory（asset_categories 語彙）駆動。
+    // この db は holdings を投入していないため空（下方の holding-queries.test.ts で担保）。
+    expect(breakdown).toEqual([]);
 
     const dailyChange = await getDailyAssetChange(undefined, db);
     expect(dailyChange).toEqual({
