@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   parseAccounts,
+  parseAssetHistory,
   parseDate,
   parseHoldings,
+  parseTransactions,
   parseYen,
   parseYenLoose,
 } from "../src/parse.js";
@@ -131,5 +133,86 @@ describe("parseHoldings（/accounts/show/{id} の「種類・名称」テーブ�
 
   it("種類・名称テーブルが無いページ（tmp 側の情報系テーブルだけ）は空配列", () => {
     expect(parseHoldings("<table><tr><th>月</th><td>10月</td></tr></table>", "acc-1")).toEqual([]);
+  });
+});
+
+describe("parseAssetHistory（/bs/history の資産推移テーブル）", () => {
+  const html = `
+  <html><body>
+  <table>
+    <thead><tr><th>日付</th><th>合計</th><th>預金・現金</th><th>株式(現物)</th><th>投資信託</th><th>債券</th><th>暗号資産</th><th>FX</th><th>年金</th><th>ポイント</th><th>詳細</th></tr></thead>
+    <tbody>
+      <tr><th>2026-10-09</th><td>46,604,121円</td><td>1,234,567円</td><td>10,000,000円</td><td>25,000,000円</td><td>0円</td><td>1,500,000円</td><td>0円</td><td>8,000,000円</td><td>869,554円</td><td><a href="/bs/history/detail">詳細</a></td></tr>
+      <tr><th>2026-10-08</th><td>46,500,000円</td><td>1,234,000円</td><td>10,000,000円</td><td>25,000,000円</td><td>0円</td><td>1,400,000円</td><td>0円</td><td>8,000,000円</td><td>866,000円</td><td><a>詳細</a></td></tr>
+    </tbody>
+  </table>
+  <table><tr><th>グラフ</th><td>...</td></tr></table>
+  </body></html>`;
+
+  it("th=日付・td=金額・ヘッダ th からカテゴリを取る（合計・詳細列は skip）", () => {
+    const points = parseAssetHistory(html);
+    expect(points.filter((p) => p.date === "2026-10-09")).toEqual([
+      { date: "2026-10-09", category: "bank", value: 1234567 },
+      // 株式(現物) と 投資信託 は同カテゴリ(securities)のため加算
+      { date: "2026-10-09", category: "securities", value: 35000000 },
+      { date: "2026-10-09", category: "other", value: 0 }, // 債券 + FX（同カテゴリ合算）
+      { date: "2026-10-09", category: "crypto", value: 1500000 },
+      { date: "2026-10-09", category: "pension", value: 8000000 },
+      { date: "2026-10-09", category: "point", value: 869554 },
+    ]);
+  });
+
+  it("日付列が解釈できない行は skip する", () => {
+    expect(parseAssetHistory("<table><tr><th>日付</th><th>預金・現金</th></tr></table>")).toEqual([]);
+  });
+});
+
+describe("parseTransactions（/cf の取引明細テーブル）", () => {
+  const html = `
+  <html><body>
+  <table><tr><th>口座</th><td>dummy</td></tr></table>
+  <table class="table table-hover">
+    <thead><tr><th>計算対象</th><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th><th>大項目</th><th>中項目</th><th>メモ</th><th>振替</th><th>削除</th></tr></thead>
+    <tbody>
+      <tr><td><input type="checkbox"></td><td>10/02(金)</td><td>スーパー</td><td>-22,000\n(振替)</td><td>三井住友カード</td><td>食費</td><td>食料品</td><td></td><td><input type="checkbox"></td><td></td></tr>
+      <tr><td><input type="checkbox"></td><td>10/05(月)</td><td>給与</td><td>300,000</td><td>イオン銀行</td><td>収入</td><td>給与</td><td></td><td></td><td></td></tr>
+      <tr><td><input type="checkbox"></td><td>10/06(火)</td><td>口座間振替</td><td>-50,000\n(振替)</td><td>イオン銀行</td><td></td><td></td><td></td><td><input type="checkbox"></td><td></td></tr>
+    </tbody>
+  </table>
+  <table><tr><th>合計</th><td>228,000円</td></tr></table>
+  </body></html>`;
+
+  it("実測列配置（日付=td[1]・内容=td[2]・金額=td[3]・大/中項目）で parse する", () => {
+    const txs = parseTransactions(html, "acc-1", new Date(2026, 9, 9));
+    expect(txs).toEqual([
+      {
+        externalId: null,
+        accountId: "acc-1",
+        date: "2026-10-02",
+        description: "スーパー",
+        amount: -22000,
+        category: "食費 / 食料品",
+      },
+      {
+        externalId: null,
+        accountId: "acc-1",
+        date: "2026-10-05",
+        description: "給与",
+        amount: 300000,
+        category: "収入 / 給与",
+      },
+      {
+        externalId: null,
+        accountId: "acc-1",
+        date: "2026-10-06",
+        description: "口座間振替",
+        amount: -50000,
+        category: null,
+      },
+    ]);
+  });
+
+  it("table-hover のテーブルが無ければ例外", () => {
+    expect(() => parseTransactions("<table><tr><th>日付</th></tr></table>", "acc-1")).toThrow(ScrapeParseError);
   });
 });

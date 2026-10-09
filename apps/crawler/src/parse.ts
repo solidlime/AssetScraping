@@ -80,8 +80,8 @@ export function parseDate(text: string, now: Date = new Date()): string | null {
 // 口座一覧・残高
 // ---------------------------------------------------------------------------
 
-/** セルテキストの正規化（改行・複数空白 → 単一空白、前後平方トリム） */
-function cellText(cell: { text: string } | undefined): string {
+/** セルテキストの正規化（改行・複数空白 → 単一空白、前後空白トリム） */
+function cellText(cell: { text: string } | null | undefined): string {
   return cell ? cell.text.replace(/\s+/g, " ").trim() : "";
 }
 
@@ -167,27 +167,75 @@ export function parseHoldings(html: string, accountId: string): Holding[] {
 // 資産推移
 // ---------------------------------------------------------------------------
 
+/**
+ * /bs/history の列ヘッダ → AccountCategory 対応（実測 2026-10）。
+ * AccountCategory に無い列（合計・詳細・日付）は null = skip。
+ * 型上の制約で 株式(現物)/投資信託、債券/FX は同カテゴリに丸める（行内で加算して合算）。
+ */
+const HISTORY_COLUMN_CATEGORY: Array<[string, AccountCategory | null]> = [
+  ["預金・現金", "bank"],
+  ["株式(現物)", "securities"],
+  ["投資信託", "securities"],
+  ["債券", "other"],
+  ["暗号資産", "crypto"],
+  ["FX", "other"],
+  ["年金", "pension"],
+  ["ポイント", "point"],
+  ["合計", null],
+  ["詳細", null],
+  ["日付", null],
+];
+
+/** 列ヘッダテキストを正規化（全角括弧 → 半角）して表引きキーにする */
+function headerKey(text: string): string {
+  return text.replace(/[（）]/g, (c) => (c === "（" ? "(" : ")")).trim();
+}
+
+/**
+ * 資産推移（/bs/history の table[0]）を parse する。実測（2026-10）:
+ * - ヘッダ行 th: 日付/合計/預金・現金/…/ポイント/詳細
+ * - 各行: th=日付（ISO そのまま）、td=金額（"46,604,121円"、列順はヘッダに対応、最終 td=詳細リンク）
+ */
 export function parseAssetHistory(html: string): AssetHistoryPoint[] {
   const root = parse(html);
-  const points: AssetHistoryPoint[] = [];
-  const rows = root.querySelectorAll("table tr");
+  const table = root
+    .querySelectorAll("table")
+    .find((t) =>
+      t.querySelectorAll("th").some((th) => headerKey(cellText(th)) === "日付"),
+    );
+  if (!table) throw new ScrapeParseError("資産推移テーブル（日付ヘッダ行）が見つかりません");
 
-  for (const row of rows) {
-    const cells = row.querySelectorAll("td, th");
-    if (cells.length < 2) continue;
-    const texts = cells.map((c) => c.text.replace(/\s+/g, " ").trim());
-    const date = parseDate(texts[0] ?? "");
-    if (!date) continue;
-    for (let i = 1; i < cells.length; i++) {
-      const value = parseYen(texts[i] ?? "");
-      if (value === null) continue;
-      const category = guessCategory(
-        row.querySelectorAll("th")[i]?.text ?? texts[i] ?? "",
-      );
+  const headerRow = table
+    .querySelectorAll("tr")
+    .find((tr) => tr.querySelectorAll("td").length === 0);
+  if (!headerRow) throw new ScrapeParseError("資産推移テーブルのヘッダ行が見つかりません");
+  const headerCells = headerRow.querySelectorAll("th");
+  if (headerCells.length === 0) {
+    throw new ScrapeParseError("資産推移テーブルのヘッダ行が th で構成されていません");
+  }
+  const columns = headerCells.map((th) => {
+    const key = headerKey(cellText(th));
+    return HISTORY_COLUMN_CATEGORY.find(([name]) => name === key)?.[1] ?? null;
+  });
+
+  const points: AssetHistoryPoint[] = [];
+  for (const row of table.querySelectorAll("tr")) {
+    const date = parseDate(cellText(row.querySelector("th")));
+    if (!date) continue; // ヘッダ行・日付不明行は skip
+    // 同一カテゴリ列（株式/投信、債券/FX 等）は行内で加算して合算する
+    const byCategory = new Map<AccountCategory, number>();
+    const tds = row.querySelectorAll("td");
+    for (let i = 0; i < columns.length; i++) {
+      const category = columns[i];
+      if (!category) continue;
+      const value = parseYen(cellText(tds[i - 1]));
+      if (value === null) continue; // 「詳細」リンク等の非金額セル
+      byCategory.set(category, (byCategory.get(category) ?? 0) + value);
+    }
+    for (const [category, value] of byCategory) {
       points.push({ date, category, value });
     }
   }
-
   return points;
 }
 
@@ -195,27 +243,48 @@ export function parseAssetHistory(html: string): AssetHistoryPoint[] {
 // 取引履歴
 // ---------------------------------------------------------------------------
 
-export function parseTransactions(html: string, accountId: string): Transaction[] {
+/**
+ * 取引明細（/cf の table-hover テーブル）を parse する。実測（2026-10）:
+ * - th ヘッダ: 計算対象/日付/内容/金額（円）/保有金融機関/大項目/中項目/…
+ * - td: [0]=checkbox、[1]=日付 "10/02(金)"、[2]=内容、[3]=金額（"-22,000\n(振替)"、負値=出金）、[5]=大項目、[6]=中項目
+ * - 取引 ID リンクは無い（externalId = null）。常に当月分のみ。
+ */
+export function parseTransactions(html: string, accountId: string, now: Date = new Date()): Transaction[] {
   const root = parse(html);
+  const table = root
+    .querySelectorAll("table")
+    .find((t) => {
+      const ths = t.querySelectorAll("th").map((th) => cellText(th));
+      return ths.includes("日付") && ths.some((s) => s.startsWith("金額"));
+    });
+  if (!table) throw new ScrapeParseError("取引明細テーブル（日付/金額ヘッダ行）が見つかりません");
+
+  const headerRow = table.querySelectorAll("tr").find((tr) => tr.querySelectorAll("td").length === 0);
+  if (!headerRow) throw new ScrapeParseError("取引明細テーブルのヘッダ行が見つかりません");
+  const header = headerRow.querySelectorAll("th").map((th) => headerKey(cellText(th)));
+  const idx = (name: string) => header.indexOf(name);
+  const dateIdx = idx("日付");
+  const descIdx = idx("内容");
+  const amountIdx = header.findIndex((s) => s.startsWith("金額"));
+  const majorIdx = idx("大項目");
+  const minorIdx = idx("中項目");
+
   const txs: Transaction[] = [];
-  const rows = root.querySelectorAll("table tr");
-
-  for (const row of rows) {
-    const cells = row.querySelectorAll("td");
-    if (cells.length < 3) continue;
-    const texts = cells.map((c) => c.text.replace(/\s+/g, " ").trim());
-    const date = parseDate(texts[0] ?? "");
+  for (const row of table.querySelectorAll("tr")) {
+    const tds = row.querySelectorAll("td");
+    if (tds.length < 3) continue;
+    const date = parseDate(cellText(tds[dateIdx]), now);
     if (!date) continue;
-    const description = texts[1] ?? "";
+    const description = cellText(tds[descIdx]);
     if (!description) continue;
-    const amount = parseYen(texts[2] ?? "");
+    // 金額セル: "-22,000\n(振替)" → -22000（(振替) 付与・負値は維持）
+    const amount = parseYenLoose(cellText(tds[amountIdx]).replace(/\(振替\)/g, ""));
     if (amount === null) continue;
-    const category = texts[3] || null;
-    const link = row.querySelector('a[href*="/transactions/"]');
-    const externalId = /\/transactions\/(\d+)/.exec(link?.getAttribute("href") ?? "")?.[1] ?? null;
-    txs.push({ externalId, accountId, date, description, amount, category });
+    const major = cellText(tds[majorIdx]);
+    const minor = cellText(tds[minorIdx]);
+    const category = [major, minor].filter(Boolean).join(" / ") || null;
+    txs.push({ externalId: null, accountId, date, description, amount, category });
   }
-
   return txs;
 }
 
