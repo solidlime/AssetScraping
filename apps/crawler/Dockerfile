@@ -17,6 +17,7 @@ WORKDIR /app
 # --- deps ---
 FROM base AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 make g++ \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
       libgbm1 libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
@@ -25,7 +26,7 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY apps/crawler/package.json apps/crawler/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @asset-scraping/crawler
+RUN pnpm install --frozen-lockfile --filter @asset-scraping/crawler --filter @asset-scraping/db --filter @asset-scraping/shared
 
 # --- build (typecheck のみ。runtime は tsx で実行するため JS ビルド不要) ---
 FROM deps AS build

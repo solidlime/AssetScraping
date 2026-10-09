@@ -7,11 +7,13 @@ RUN corepack enable
 WORKDIR /app
 
 FROM base AS deps
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY apps/web/package.json apps/web/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @asset-scraping/web
+RUN pnpm install --frozen-lockfile --filter @asset-scraping/web --filter @asset-scraping/db --filter @asset-scraping/shared
 
 FROM deps AS build
 COPY tsconfig.base.json ./
