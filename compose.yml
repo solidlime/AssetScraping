@@ -1,0 +1,40 @@
+# Asset Scraping — docker compose
+# crawler のみ .env を読む（認証情報はコンテナへ注入、ホストには出さない）
+# mcp は compose 外の独立イメージ（README の mcpServers 設定例を参照）
+services:
+  crawler:
+    build:
+      context: .
+      dockerfile: apps/crawler/Dockerfile
+    image: asset-scraping-crawler
+    env_file: .env
+    environment:
+      - TZ=Asia/Tokyo
+      - DB_PATH=/data/asset-scraping.db
+      - AUTH_STATE_PATH=/data/auth-state.json
+    volumes:
+      - mfb-data:/data
+    ports:
+      - "8766:8766"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: asset-scraping-web
+    environment:
+      - TZ=Asia/Tokyo
+      - DB_PATH=file:/data/asset-scraping.db?mode=ro
+      - CRAWLER_URL=http://crawler:8766
+    volumes:
+      - mfb-data:/data:ro
+    ports:
+      - "8765:8765"
+    depends_on:
+      - crawler
+    restart: unless-stopped
+
+volumes:
+  mfb-data:
+    external: true
