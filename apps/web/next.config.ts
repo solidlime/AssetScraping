@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // better-sqlite3 はネイティブ addon のため bundle せず node_modules から実行時 require
+  // （bundle すると __dirname が .next/server に化けて bindings が見つからない）
+  serverExternalPackages: ["@asset-scraping/db", "better-sqlite3", "drizzle-orm"],
   // pnpm workspace の TS ソース (packages/db) を直接参照するため、
   // workspace ルート外のシンボリックリンク先をトレースさせる
   outputFileTracingRoot: path.join(import.meta.dirname, "../.."),
@@ -17,6 +20,12 @@ const nextConfig: NextConfig = {
       ".mjs": [".mts", ".mjs"],
       ".cjs": [".cts", ".cjs"],
     };
+    // better-sqlite3（ネイティブ addon）は bundle せず node_modules から実行時 require。
+    // bundle すると __dirname が .next/server に化けて bindings が見つからない。
+    config.externals = [
+      ...(Array.isArray(config.externals) ? config.externals : []),
+      { "better-sqlite3": "commonjs better-sqlite3" },
+    ];
     return config;
   },
 };
