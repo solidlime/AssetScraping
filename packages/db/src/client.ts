@@ -33,8 +33,12 @@ export function createDb(options: CreateDbOptions = {}): Database {
     mkdirSync(dirname(path), { recursive: true });
   }
 
-  const fileUrlMatch = /^file:(.*)$/.exec(path);
-  const sqlite = new DatabaseConstructor(fileUrlMatch ? path : path, {
+  // better-sqlite3 は既定で URI filename を解釈しないため、file: URL は素のパスに正規化する。
+  // （file: URL をそのまま渡すと「file:/data/...」という名前の空 DB が開かれてしまう）
+  const filePath = path.startsWith("file:")
+    ? decodeURIComponent(new URL(path).pathname)
+    : path;
+  const sqlite = new DatabaseConstructor(filePath, {
     // read-only は file: URL の ?mode=ro でも指定可能だが、
     // ここではフラグで明示する（URL クエリと重複しても問題ない）
     readonly: options.readOnly ?? false,
