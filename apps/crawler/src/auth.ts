@@ -87,6 +87,8 @@ async function fillCredentials(page: Page, loginId: string, password: string): P
   const emailInput = page
     .locator(
       [
+        'input#sign_in_session_service_email',
+        'input[name="sign_in_session_service[email]"]',
         'input#user_email',
         'input[name="user[email]"]',
         'input[name="email"]',
@@ -97,6 +99,8 @@ async function fillCredentials(page: Page, loginId: string, password: string): P
   const passwordInput = page
     .locator(
       [
+        'input#sign_in_session_service_password',
+        'input[name="sign_in_session_service[password]"]',
         'input#user_password',
         'input[name="user[password]"]',
         'input[name="password"]',
@@ -119,6 +123,7 @@ async function fillCredentials(page: Page, loginId: string, password: string): P
   const submit = page
     .locator(
       [
+        'input#login-btn-sumit',
         'input[type="submit"][value*="ログイン"]',
         'button[type="submit"]',
         'input[type="submit"]',

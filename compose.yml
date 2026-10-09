@@ -18,6 +18,21 @@ services:
       - "8766:8766"
     restart: unless-stopped
 
+  # WebUI ログイン（noVNC）。`docker compose up login-web` で一時起動する。
+  # ホストブラウザで http://localhost:8767/vnc.html を開き、表示された Chromium で ssnb にログインする。
+  login-web:
+    image: asset-scraping-crawler
+    env_file: .env
+    environment:
+      - TZ=Asia/Tokyo
+      - AUTH_STATE_PATH=/data/auth-state.json
+    volumes:
+      - mfb-data:/data
+    ports:
+      - "8767:6080"
+    command: ["/app/docker/login-web.sh"]
+    restart: "no"
+
   web:
     build:
       context: .
