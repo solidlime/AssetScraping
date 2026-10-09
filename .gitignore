@@ -12,4 +12,23 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+
+# Credentials
 .env
+
+# Build outputs
+turbo
+.next
+out
+
+# Test
+test-results
+playwright-report
+
+# drizzle output
+drizzle/meta
+
+# Local sqlite
+data/*.db
+*.db-wal
+*.db-shm
