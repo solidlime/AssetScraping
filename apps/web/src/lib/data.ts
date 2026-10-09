@@ -11,13 +11,9 @@ import {
   type MonthlySummary,
 } from "@asset-scraping/db";
 
-/** web は read-only 接続。DB_PATH が file: URL の場合は ?mode=ro を付ける */
+/** web は read-only 接続（readOnly フラグで開く。file: URL は better-sqlite3 で解決しないため使わない） */
 export function getDb() {
-  const path = resolveDbPath();
-  if (path.startsWith("file:")) {
-    return createDb({ path: path.includes("?") ? path : `${path}?mode=ro` });
-  }
-  return createDb({ path, readOnly: true });
+  return createDb({ path: resolveDbPath(), readOnly: true });
 }
 
 export interface DashboardData {

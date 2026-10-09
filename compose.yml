@@ -25,10 +25,10 @@ services:
     image: asset-scraping-web
     environment:
       - TZ=Asia/Tokyo
-      - DB_PATH=file:/data/asset-scraping.db?mode=ro
+      - DB_PATH=/data/asset-scraping.db
       - CRAWLER_URL=http://crawler:8766
     volumes:
-      - mfb-data:/data:ro
+      - mfb-data:/data
     ports:
       - "8765:8765"
     depends_on:
