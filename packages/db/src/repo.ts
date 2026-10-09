@@ -9,9 +9,11 @@ import type {
 import { and, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { categorizeDbTransaction } from "./shared/categorize.ts";
 import type { Database } from "./client.ts";
+import { getOrCreateCategory } from "./repositories/categories.ts";
 import {
   accounts,
   accountStatuses,
+  assetCategories,
   assetHistory,
   cashFlowPeriods,
   dailySnapshots,
@@ -214,12 +216,22 @@ export function upsertDailySnapshot(
 export function upsertHoldings(db: Database, rows: Holding[]): void {
   if (rows.length === 0) return;
   const ts = nowIso();
+  // 本家 saveScrapedData の portfolio 保存相当: 銘柄の assetCategory（本家語彙）で
+  // asset_categories を get-or-create し、holdings.categoryId に割当する。
+  // /bs のカテゴリ集計（getAssetBreakdownByCategory・hasInvestmentHoldings）の前提。
+  const categoryIdByName = new Map<string, number>();
+  for (const h of rows) {
+    if (h.assetCategory && !categoryIdByName.has(h.assetCategory)) {
+      categoryIdByName.set(h.assetCategory, getOrCreateCategory(db, h.assetCategory));
+    }
+  }
   db.transaction((tx) => {
     for (const h of rows) {
       tx.insert(holdings)
         .values({
           accountId: h.accountId,
           name: h.name,
+          categoryId: h.assetCategory ? (categoryIdByName.get(h.assetCategory) ?? null) : null,
           quantity: h.quantity,
           value: h.value,
           averagePrice: h.averagePrice,
@@ -231,6 +243,7 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
         .onConflictDoUpdate({
           target: [holdings.accountId, holdings.name],
           set: {
+            categoryId: h.assetCategory ? (categoryIdByName.get(h.assetCategory) ?? null) : null,
             quantity: h.quantity,
             value: h.value,
             averagePrice: h.averagePrice,

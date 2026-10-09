@@ -41,6 +41,68 @@ afterAll(() => {
 });
 
 describe("repo round-trip", () => {
+  it("upsertHoldings が assetCategory から asset_categories を登録し categoryId を割当する", () => {
+    const db = freshDb();
+
+    upsertAccount(db, { id: "acc-1", name: "SBIベネフィット", institution: "SBI", category: "other" });
+
+    upsertHoldings(db, [
+      {
+        accountId: "acc-1",
+        name: "eMAXIS Slim 米国株式(S&P500)",
+        assetCategory: "投資信託",
+        quantity: 1,
+        value: 110000,
+        averagePrice: null,
+        unrealizedGain: null,
+        scrapedAt: "2026-02-14T06:30:00.000Z",
+      },
+      {
+        accountId: "acc-1",
+        name: "普通預金",
+        assetCategory: "預金・現金",
+        quantity: 0,
+        value: 35,
+        averagePrice: null,
+        unrealizedGain: null,
+        scrapedAt: "2026-02-14T06:30:00.000Z",
+      },
+      // 同じ語彙は同一 asset_categories 行を共有する
+      {
+        accountId: "acc-1",
+        name: "ニッセイ日経平均インデックスファンド",
+        assetCategory: "投資信託",
+        quantity: 1,
+        value: 110000,
+        averagePrice: null,
+        unrealizedGain: null,
+        scrapedAt: "2026-02-14T06:30:00.000Z",
+      },
+      // assetCategory 無し行は null のまま（本家: 負債等と同様）
+      {
+        accountId: "acc-1",
+        name: "不明銘柄",
+        quantity: 0,
+        value: 0,
+        averagePrice: null,
+        unrealizedGain: null,
+        scrapedAt: "2026-02-14T06:30:00.000Z",
+      },
+    ]);
+
+    const cats = db.select().from(schema.assetCategories).all();
+    expect(cats.map((c) => c.name).sort()).toEqual(["投資信託", "預金・現金"]);
+
+    const rows = db.select().from(schema.holdings).all();
+    const fund = rows.find((h) => h.name.startsWith("eMAXIS"));
+    const nikkei = rows.find((h) => h.name.startsWith("ニッセイ"));
+    const deposit = rows.find((h) => h.name === "普通預金");
+    expect(fund?.categoryId).not.toBeNull();
+    expect(fund?.categoryId).toBe(nikkei?.categoryId);
+    expect(deposit?.categoryId).not.toBe(fund?.categoryId);
+    expect(rows.find((h) => h.name === "不明銘柄")?.categoryId).toBeNull();
+  });
+
   it("upsert → read が素通しで一致する", () => {
     const db = freshDb();
 
