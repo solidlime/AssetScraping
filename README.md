@@ -24,14 +24,25 @@ compose.yml
 - `.env` に ssnb の認証情報（SSNB_LOGIN_ID / SSNB_PASSWORD）を設定
 - `docker compose up -d crawler web`
 
-## MCP 接続（Claude Desktop 等の mcpServers 設定例）
+## mcp-hub / Claude Desktop 登録
+
+MCP サーバーは独立イメージ `asset-scraping-mcp` として配布する。まずビルド:
+
+```sh
+docker build -f apps/mcp/Dockerfile -t asset-scraping-mcp .
+```
+
+Claude Desktop（claude_desktop_config.json）や mcp-hub の mcpServers 設定例:
+
 ```json
 {
   "mcpServers": {
     "asset-scraping": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "mfb-data:/data:ro", "mfb-mcp"]
+      "args": ["run", "-i", "--rm", "-v", "mfb-data:/data:ro", "asset-scraping-mcp"]
     }
   }
 }
 ```
+
+ツール: `get_accounts` / `get_transactions` / `get_holdings` / `get_asset_history` / `get_monthly_summary`（すべて read-only）
