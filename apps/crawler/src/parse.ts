@@ -40,19 +40,40 @@ export function guessCategory(text: string): AccountCategory {
   return "other";
 }
 
-/** "1,234,567円" / "-12,345円" / "1,234,567" → number */
+/** "1,234,567円" / "-12,345円" → number。円表記が必須（日付・カレンダー数字の誤爆防止）。 */
 export function parseYen(text: string): number | null {
-  const m = /(-?[\d,]+(?:\.\d+)?)\s*(?:円|px)?/.exec(text.replace(/\s/g, ""));
+  const m = /(-?\d[\d,]*(?:\.\d+)?)円/.exec(text.replace(/\s/g, ""));
   if (!m) return null;
   const n = Number(m[1]?.replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
 }
 
-export function parseDate(text: string): string | null {
-  const m = /(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/.exec(text);
+/**
+ * 円表記なしの数値（取引明細金額 "-22,000\n(振替)" 等）。最初の数値トークンを返す。
+ * 日付・カテゴリ等の非金額セルは呼び出し側で選んで渡すこと。
+ */
+export function parseYenLoose(text: string): number | null {
+  const m = /(-?\d[\d,]*(?:\.\d+)?)/.exec(text.replace(/\s/g, ""));
   if (!m) return null;
-  const [, y, mo, d] = m;
-  return `${y}-${mo!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
+  const n = Number(m[1]?.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+export function parseDate(text: string, now: Date = new Date()): string | null {
+  const iso = /(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/.exec(text);
+  if (iso) {
+    const [, y, mo, d] = iso;
+    return `${y}-${mo!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
+  }
+  // 実測: 取引明細の日付は "10/02(金)"（年なし、当月=当年）
+  const md = /(\d{1,2})\/(\d{1,2})/.exec(text);
+  if (md) {
+    const mo = Number(md[1]);
+    const d = Number(md[2]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return `${now.getFullYear()}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
