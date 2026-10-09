@@ -7,7 +7,7 @@ import type {
   Transaction,
 } from "@asset-scraping/shared";
 import { desc, eq, gte, isNotNull, sql } from "drizzle-orm";
-import type { Database } from "./client.js";
+import type { Database } from "./client.ts";
 import {
   accounts,
   accountStatuses,
@@ -15,9 +15,9 @@ import {
   dailySnapshots,
   holdings,
   transactions,
-} from "./schema.js";
+} from "./schema.ts";
 
-export * from "./schema.js";
+export * from "./schema.ts";
 
 const nowIso = () => new Date().toISOString();
 

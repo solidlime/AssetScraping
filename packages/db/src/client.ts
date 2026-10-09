@@ -3,7 +3,9 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import * as schema from "./schema.js";
+// Node.js ESM で .ts ソースを直接実行する（tsx / Next.js は拡張子付き import を別解決する）ため、
+// 実行時は .ts 解決が必要。tsc --noEmit との両立のため allowImportingTsExtensions を使う。
+import * as schema from "./schema.ts";
 
 export { schema };
 
