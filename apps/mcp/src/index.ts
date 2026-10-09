@@ -1,92 +1,95 @@
 /**
- * stdio MCP サーバー（read-only）。
- * ツール: get_accounts / get_transactions / get_holdings / get_asset_history / get_monthly_summary
- * DB は read-only 接続。更新トリガーは持たない（web UI に一元化）。
+ * MCP サーバー（read-only）。
+ * transport は MCP_TRANSPORT 環境変数で切り替える（デフォルト stdio = 後方互換）。
+ * - stdio: StdioServerTransport（Claude Desktop 等のローカル起動用）
+ * - http : Streamable HTTP（/mcp エンドポイント、Docker 常駐サーバー用）
  */
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import {
-  getAllAccountStatuses,
-  getAllAccounts,
-  getAssetHistory,
-  getHoldings,
-  getMonthlySummary,
-  getTransactions,
-  resolveDbPath,
-} from "@asset-scraping/db";
-import { dbTool } from "./tools.js";
+import { resolveDbPath } from "@asset-scraping/db";
+import { createMcpServer } from "./server.ts";
 
-const server = new McpServer(
-  { name: "asset-scraping", version: "0.1.0" },
-  { capabilities: { tools: {} } },
-);
+const transportMode = process.env.MCP_TRANSPORT ?? "stdio";
 
-server.tool("get_accounts", "ssnb の口座一覧と現在残高を取得する", {}, () =>
-  dbTool((db) => {
-    const accounts = getAllAccounts(db);
-    const statuses = new Map(getAllAccountStatuses(db).map((s) => [s.accountId, s]));
-    return accounts.map((a) => ({
-      id: a.id,
-      name: a.name,
-      institution: a.institution,
-      category: a.category,
-      balance: statuses.get(a.id)?.balance ?? null,
-      scrapedAt: statuses.get(a.id)?.scrapedAt ?? null,
-    }));
-  }),
-);
+async function startStdio(): Promise<void> {
+  const server = createMcpServer();
+  await server.connect(new StdioServerTransport());
+  // ログは stdout（MCP プロトコル）を塞がないよう stderr へ
+  console.error(`[mcp] asset-scraping MCP ready (stdio, db=${resolveDbPath()})`);
+}
 
-server.tool(
-  "get_transactions",
-  "取引履歴を取得する（limit / since で絞り込み）",
-  {
-    limit: z.number().int().min(1).max(1000).default(100).describe("最大件数"),
-    since: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .optional()
-      .describe("この日付以降 (YYYY-MM-DD)"),
-  },
-  ({ limit, since }) => dbTool((db) => getTransactions(db, { limit, since })),
-);
+async function startHttp(): Promise<void> {
+  const { createServer } = await import("node:http");
+  const { StreamableHTTPServerTransport } = await import(
+    "@modelcontextprotocol/sdk/server/streamableHttp.js"
+  );
 
-server.tool(
-  "get_holdings",
-  "保有資産（銘柄・数量・評価額・含み損益）を取得する",
-  {
-    accountId: z.string().optional().describe("口座 ID で絞り込み"),
-  },
-  ({ accountId }) => dbTool((db) => getHoldings(db, accountId)),
-);
+  const port = Number(process.env.PORT ?? 26280);
+  const host = process.env.BIND ?? "0.0.0.0";
 
-server.tool(
-  "get_asset_history",
-  "資産推移（日次 × カテゴリ別）を取得する",
-  {
-    since: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .optional()
-      .describe("この日付以降 (YYYY-MM-DD)"),
-  },
-  ({ since }) => dbTool((db) => getAssetHistory(db, { since })),
-);
+  const httpServer = createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
-server.tool(
-  "get_monthly_summary",
-  "月次収支サマリー（収入・支出・収支）を取得する",
-  {
-    months: z.number().int().min(1).max(60).default(12).describe("直近 N ヶ月"),
-  },
-  ({ months }) => dbTool((db) => getMonthlySummary(db, { months })),
-);
+    if (url.pathname === "/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (url.pathname !== "/mcp") {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+
+    // stateless モード（sessionIdGenerator: undefined）を選択。
+    // 理由: このサーバーは read-only ツールのみでセッション状態を持たず、
+    // dbTool もリクエストごとに DB を open/close するため、
+    // セッションごとの transport 管理よりリクエストごとの新規 transport が単純でリークもない。
+    // SDK の stateless モードは 1 transport = 1 リクエスト限定のため、
+    // POST ごとに新しい McpServer + transport を生成する（公式 stateless パターン）。
+    if (req.method === "POST") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      let parsedBody: unknown;
+      try {
+        parsedBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null }));
+        return;
+      }
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+      res.on("close", () => {
+        void transport.close();
+      });
+      const server = createMcpServer();
+      await server.connect(transport);
+      await transport.handleRequest(req, res, parsedBody);
+      return;
+    }
+
+    // GET（SSE）/ DELETE: stateless ではセッションを持たないため非対応。
+    // 405 + allow で伝える（Streamable HTTP 仕様上も server-initiated SSE / 明示的
+    // session 解除はオプションで、tools-only の本サーバーでは不要）。
+    res.writeHead(405, { allow: "POST" });
+    res.end();
+  });
+
+  httpServer.listen(port, host, () => {
+    // HTTP モードでは stdout を塞ぐ心配がないためそのまま出す
+    console.log(`[mcp] asset-scraping MCP listening on http://${host}:${port}/mcp (db=${resolveDbPath()})`);
+  });
+}
 
 async function main(): Promise<void> {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  // ログは stdout（MCP プロトコル）を塞がないよう stderr へ
-  console.error(`[mcp] asset-scraping MCP ready (db=${resolveDbPath()})`);
+  if (transportMode === "http") {
+    await startHttp();
+  } else {
+    await startStdio();
+  }
 }
 
 main().catch((err) => {
