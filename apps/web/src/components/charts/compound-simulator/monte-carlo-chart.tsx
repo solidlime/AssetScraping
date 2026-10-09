@@ -14,7 +14,7 @@ import {
 } from "recharts";
 import { CHART_INITIAL_DIMENSION } from "../../../lib/chart";
 import { formatCurrency } from "../../../lib/format";
-import { chartTooltipStyle } from "../../../lib/chart";
+import { chartTooltipStyle } from "../chart-tooltip";
 import { formatYAxisAmount, type FanChartDataPoint } from "./compound-simulator-utils.ts";
 
 export interface MonteCarloChartProps {

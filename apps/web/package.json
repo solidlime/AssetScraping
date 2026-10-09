@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@asset-scraping/date-utils": "workspace:*",
     "@asset-scraping/db": "workspace:*",
     "@asset-scraping/shared": "workspace:*",
     "@base-ui/react": "^1.8.0",

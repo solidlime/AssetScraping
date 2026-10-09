@@ -40,6 +40,40 @@
   --color-expense: #b91c1c;
   --color-balance-positive: #146e35;
   --color-balance-negative: #9c3f00;
+  --color-transfer: #6b7280;
+  --color-total-assets: #2563eb;
+  --color-liability: #dc2626;
+  --color-net-assets: #16a34a;
+
+  /* === Asset category colors === */
+  --color-asset-deposit: #0ea5e9;
+  --color-asset-crypto: #f59e0b;
+  --color-asset-prepaid: #14b8a6;
+  --color-asset-stock: #6366f1;
+  --color-asset-fund: #8b5cf6;
+  --color-asset-insurance: #64748b;
+  --color-asset-pension: #a16207;
+  --color-asset-point: #d946ef;
+
+  /* === Expense category colors === */
+  --color-cat-cash-card: #78716c;
+  --color-cat-housing: #7c3aed;
+  --color-cat-utility: #0ea5e9;
+  --color-cat-communication: #10b981;
+  --color-cat-automobile: #334155;
+  --color-cat-tax: #b91c1c;
+  --color-cat-daily: #84cc16;
+  --color-cat-food: #f97316;
+  --color-cat-education: #3b82f6;
+  --color-cat-entertainment: #ec4899;
+  --color-cat-clothing: #d946ef;
+  --color-cat-health: #ef4444;
+  --color-cat-special: #9333ea;
+  --color-cat-other: #9ca3af;
+  --color-cat-transport: #06b6d4;
+  --color-cat-social: #f43f5e;
+  --color-cat-income: #2563eb;
+  --color-cat-uncategorized: #9ca3af;
 }
 
 @layer base {

@@ -3,10 +3,10 @@
 import { Calculator } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import type { PortfolioContext, WithdrawalMode } from "./compound-simulator-types.ts";
-import { MonteCarloChart } from "./monte-carlo-chart.ts";
-import { ProjectionChart } from "./projection-chart.ts";
-import { SettingsPanel } from "./settings-panel.ts";
-import { SummaryPanel } from "./summary-panel.ts";
+import { MonteCarloChart } from "./monte-carlo-chart";
+import { ProjectionChart } from "./projection-chart";
+import { SettingsPanel } from "./settings-panel";
+import { SummaryPanel } from "./summary-panel";
 import { useCompoundSimulator } from "./use-compound-simulator.ts";
 
 function envNum(value: string | undefined): number | undefined {

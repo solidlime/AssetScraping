@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import { CHART_INITIAL_DIMENSION } from "../../../lib/chart";
 import { formatCurrency } from "../../../lib/format";
-import { chartTooltipStyle } from "../../../lib/chart";
+import { chartTooltipStyle } from "../chart-tooltip";
 import type { YearlyProjection } from "./calculate-compound.ts";
 import { formatYAxisAmount, getLabelMap } from "./compound-simulator-utils.ts";
 

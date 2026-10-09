@@ -225,6 +225,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@asset-scraping/date-utils':
+        specifier: workspace:*
+        version: link:../../packages/date-utils
       '@asset-scraping/db':
         specifier: workspace:*
         version: link:../../packages/db

@@ -1,39 +1,68 @@
-export function formatYen(n: number): string {
-  return new Intl.NumberFormat("ja-JP", {
-    style: "currency",
-    currency: "JPY",
-    maximumFractionDigits: 0,
-  }).format(n);
-}
+/**
+ * 金額・日付フォーマット（本家 mf-dashboard の lib/format.ts 準拠）。
+ * 日付ユーティリティは @asset-scraping/date-utils を使う。
+ */
+import {
+  formatJstDateTimeForDisplay,
+  parseIsoDateKey,
+  parseYearMonthKey,
+} from "@asset-scraping/date-utils";
 
-/** 1234567 -> "1,234,567円" （符号オプション付き） */
 export function formatCurrency(amount: number, showPlusSign = false): string {
   const sign = showPlusSign && amount > 0 ? "+" : "";
   return `${sign}${amount.toLocaleString("ja-JP")}円`;
 }
 
-export function formatPercent(value: number, decimals = 1): string {
+export function formatNumber(num: number): string {
+  return new Intl.NumberFormat("ja-JP").format(num);
+}
+
+export function formatPercent(value: number, decimals: number = 1): string {
   const sign = value < 0 ? "-" : "";
   return `${sign}${Math.abs(value).toFixed(decimals)}%`;
 }
 
-/** 前日比など増減値の色クラス。収入=青系 / 支出=赤系（本家ダッシュボードの慣習に準拠） */
-export function deltaColorClass(value: number): string {
-  if (value > 0) return "text-blue-700";
-  if (value < 0) return "text-red-700";
-  return "text-neutral-500";
-}
-
-/** ISO 日付文字列 ("2025-01-31") -> "2025年1月31日" */
 export function formatDate(dateStr: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!m) return dateStr;
-  return `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日`;
+  const { year, month, day } = parseIsoDateKey(dateStr);
+  return `${year}年${month}月${day}日`;
 }
 
-/** "2025-01" -> "2025年1月" */
 export function formatMonth(monthStr: string): string {
-  const m = /^(\d{4})-(\d{2})$/.exec(monthStr);
-  if (!m) return monthStr;
-  return `${Number(m[1])}年${Number(m[2])}月`;
+  const { year, month } = parseYearMonthKey(monthStr);
+  return `${year}年${month}月`;
+}
+
+export function getShortMonth(monthStr: string): string {
+  const { month } = parseYearMonthKey(monthStr);
+  return `${month}月`;
+}
+
+export function formatDateShort(dateStr: string): string {
+  const { month, day } = parseIsoDateKey(dateStr);
+  return `${month}月${day}日`;
+}
+
+export function formatDateTime(dateStr: string): string {
+  return formatJstDateTimeForDisplay(new Date(dateStr), {
+    includeYear: false,
+    includeSeconds: false,
+  });
+}
+
+export function formatLastUpdated(lastUpdated: string | null, includeYear = false): string | null {
+  if (!lastUpdated) return null;
+
+  const localDateTime = lastUpdated.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})?$/);
+  if (localDateTime) {
+    const [, year, month, day, hours, minutes] = localDateTime;
+    if (includeYear) {
+      return `${Number(year)}/${Number(month)}/${Number(day)} ${hours}:${minutes}`;
+    }
+    return `${Number(month)}/${Number(day)} ${hours}:${minutes}`;
+  }
+
+  const date = new Date(lastUpdated);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return formatJstDateTimeForDisplay(date, { includeYear, includeSeconds: false });
 }

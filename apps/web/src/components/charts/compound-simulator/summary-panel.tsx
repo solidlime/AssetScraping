@@ -5,10 +5,10 @@ import { MetricLabel } from "../../ui/metric-label";
 import { Tooltip as UiTooltip } from "../../ui/tooltip";
 import type { YearlyProjection } from "./calculate-compound.ts";
 import type { DrawdownPercentile } from "./compound-simulator-types.ts";
-import { SecurityScore } from "./security-score.ts";
-import { SensitivityTable } from "./sensitivity-table.ts";
+import { SecurityScore } from "./security-score";
+import { SensitivityTable } from "./sensitivity-table";
 import type { MonteCarloResult, SensitivityRow } from "./simulate-monte-carlo.ts";
-import { TimelinePhaseChips } from "./timeline.ts";
+import { TimelinePhaseChips } from "./timeline";
 
 export interface SummaryPanelProps {
   withdrawalYears: number;

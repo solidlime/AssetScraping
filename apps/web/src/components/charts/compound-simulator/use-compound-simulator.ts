@@ -17,7 +17,7 @@ import {
   computeWithdrawalMilestones,
   selectMilestones,
 } from "./compound-simulator-utils.ts";
-import { generateSummary } from "./generate-summary.ts";
+import { generateSummary } from "./generate-summary";
 import { adjustedPension } from "./pension-utils.ts";
 import { PRODUCT_PRESETS } from "./product-presets.ts";
 import type { MonteCarloInput } from "./simulate-monte-carlo.ts";

@@ -9,7 +9,7 @@ import { Slider } from "../../ui/slider";
 import { Switch } from "../../ui/switch";
 import type { PortfolioContext, WithdrawalMode } from "./compound-simulator-types.ts";
 import { PRODUCT_PRESETS } from "./product-presets.ts";
-import { InteractiveTimelineBar } from "./timeline.ts";
+import { InteractiveTimelineBar } from "./timeline";
 
 export interface SettingsPanelProps {
   currentAge?: number;
