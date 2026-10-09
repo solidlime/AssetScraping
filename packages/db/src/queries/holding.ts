@@ -1,4 +1,4 @@
-import { desc, eq, and, isNotNull, inArray } from "drizzle-orm";
+import { eq, and, isNotNull, inArray, max } from "drizzle-orm";
 import { getDb, type Db, schema } from "../index.ts";
 import { resolveGroupId, getAccountIdsForGroup } from "../shared/group-filter.ts";
 
@@ -21,48 +21,31 @@ async function getHoldingAccountIdsForGroup(db: Db, groupId: string): Promise<st
 }
 
 /**
- * 最新のスナップショットを取得
- * スナップショットは全アカウント共通で1つ作成される
+ * 各 holding の最新 holding_values 行を駆動するサブクエリ。
+ * 現行 daily_snapshots は口座別（1日1口座1行）であり、本家の
+ * 「全アカウント共通で1行」前提が成立しないため、snapshot 単位ではなく
+ * holding 単位で最新行を解決する。
  */
-export async function getLatestSnapshot(db: Db = getDb()) {
-  return await db
-    .select()
-    .from(schema.dailySnapshots)
-    .orderBy(desc(schema.dailySnapshots.id))
-    .limit(1)
-    .get();
-}
-
-/**
- * 保有資産を取得する共通のwhere条件を構築
- */
-export function buildHoldingWhereCondition(
-  snapshotId: number,
-  accountIds: string[],
-  additionalCondition?: ReturnType<typeof eq>,
-) {
-  return and(
-    eq(schema.holdingValues.snapshotId, snapshotId),
-    inArray(schema.holdings.accountId, accountIds),
-    additionalCondition,
-  );
+function latestHoldingValuesSubquery(db: Db) {
+  return db
+    .select({
+      holdingId: schema.holdingValues.holdingId,
+      snapshotId: max(schema.holdingValues.snapshotId).as("snapshotId"),
+    })
+    .from(schema.holdingValues)
+    .groupBy(schema.holdingValues.holdingId)
+    .as("latest_holding_values");
 }
 
 /**
  * 保有資産の最新値を取得
- * snapshotIdで駆動し、グループでフィルタリング
+ * 各 holding の最新 holding_values（口座別 snapshot に対応）＋グループでフィルタリング
  */
 export async function getHoldingsWithLatestValues(groupIdParam?: string, db: Db = getDb()) {
-  const latestSnapshot = await getLatestSnapshot(db);
-
-  if (!latestSnapshot) {
-    return [];
-  }
-
   const groupId = await resolveGroupId(db, groupIdParam);
   const accountIds = groupId ? await getHoldingAccountIdsForGroup(db, groupId) : [];
 
-  const whereCondition = buildHoldingWhereCondition(latestSnapshot.id, accountIds);
+  const latest = latestHoldingValuesSubquery(db);
 
   return await db
     .select({
@@ -84,10 +67,17 @@ export async function getHoldingsWithLatestValues(groupIdParam?: string, db: Db 
       unrealizedGainPct: schema.holdingValues.unrealizedGainPct,
     })
     .from(schema.holdingValues)
+    .innerJoin(
+      latest,
+      and(
+        eq(schema.holdingValues.holdingId, latest.holdingId),
+        eq(schema.holdingValues.snapshotId, latest.snapshotId),
+      ),
+    )
     .innerJoin(schema.holdings, eq(schema.holdings.id, schema.holdingValues.holdingId))
     .leftJoin(schema.assetCategories, eq(schema.assetCategories.id, schema.holdings.categoryId))
     .leftJoin(schema.accounts, eq(schema.accounts.id, schema.holdings.accountId))
-    .where(whereCondition)
+    .where(inArray(schema.holdings.accountId, accountIds))
     .all();
 }
 
@@ -106,11 +96,7 @@ export async function getHoldingsByAccountId(
   const accountIds = await getAccountIdsForGroup(db, groupId);
   if (accountIds.length === 0 || !accountIds.includes(accountId)) return [];
 
-  const latestSnapshot = await getLatestSnapshot(db);
-
-  if (!latestSnapshot) {
-    return [];
-  }
+  const latest = latestHoldingValuesSubquery(db);
 
   return await db
     .select({
@@ -130,15 +116,17 @@ export async function getHoldingsByAccountId(
       unrealizedGainPct: schema.holdingValues.unrealizedGainPct,
     })
     .from(schema.holdingValues)
+    .innerJoin(
+      latest,
+      and(
+        eq(schema.holdingValues.holdingId, latest.holdingId),
+        eq(schema.holdingValues.snapshotId, latest.snapshotId),
+      ),
+    )
     .innerJoin(schema.holdings, eq(schema.holdings.id, schema.holdingValues.holdingId))
     .leftJoin(schema.assetCategories, eq(schema.assetCategories.id, schema.holdings.categoryId))
     .leftJoin(schema.accounts, eq(schema.accounts.id, schema.holdings.accountId))
-    .where(
-      and(
-        eq(schema.holdingValues.snapshotId, latestSnapshot.id),
-        eq(schema.holdings.accountId, accountId),
-      ),
-    )
+    .where(eq(schema.holdings.accountId, accountId))
     .all();
 }
 
@@ -159,20 +147,10 @@ export async function getHoldingsWithDailyChange(
   groupIdParam?: string,
   db: Db = getDb(),
 ): Promise<HoldingWithDailyChange[]> {
-  const latestSnapshot = await getLatestSnapshot(db);
-
-  if (!latestSnapshot) {
-    return [];
-  }
-
   const groupId = await resolveGroupId(db, groupIdParam);
   const accountIds = groupId ? await getHoldingAccountIdsForGroup(db, groupId) : [];
 
-  const whereCondition = buildHoldingWhereCondition(
-    latestSnapshot.id,
-    accountIds,
-    isNotNull(schema.holdingValues.dailyChange),
-  );
+  const latest = latestHoldingValuesSubquery(db);
 
   return (await db
     .select({
@@ -184,10 +162,22 @@ export async function getHoldingsWithDailyChange(
       dailyChange: schema.holdingValues.dailyChange,
     })
     .from(schema.holdingValues)
+    .innerJoin(
+      latest,
+      and(
+        eq(schema.holdingValues.holdingId, latest.holdingId),
+        eq(schema.holdingValues.snapshotId, latest.snapshotId),
+      ),
+    )
     .innerJoin(schema.holdings, eq(schema.holdings.id, schema.holdingValues.holdingId))
     .leftJoin(schema.assetCategories, eq(schema.assetCategories.id, schema.holdings.categoryId))
     .leftJoin(schema.accounts, eq(schema.accounts.id, schema.holdings.accountId))
-    .where(whereCondition)
+    .where(
+      and(
+        inArray(schema.holdings.accountId, accountIds),
+        isNotNull(schema.holdingValues.dailyChange),
+      ),
+    )
     .all()) as HoldingWithDailyChange[];
 }
 
