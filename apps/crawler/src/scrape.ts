@@ -89,7 +89,10 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     const holdingsRows: Holding[] = [];
     for (const acc of accounts) {
       const html = await fetcher.fetch(SSNB_URLS.accountShow(acc.id));
-      const holdings = parseHoldings(html, acc.id);
+      const holdings = parseHoldings(html, acc.id, {
+        category: acc.category as AccountCategory,
+        accountName: acc.name,
+      });
       upsertHoldings(db, holdings);
       holdingsRows.push(...holdings);
       stats.holdingsUpserted += holdings.length;

@@ -51,6 +51,8 @@ export interface AccountStatus {
 export interface Holding {
   accountId: string;
   name: string;
+  /** 本家資産カテゴリ語彙（預金・現金 / 株式(現物) / 投資信託 / …）。scraper 側推定 */
+  assetCategory?: string;
   /** 数量（口座種別により意味が変わる: 株数、口数、円） */
   quantity: number;
   /** 評価額（円） */

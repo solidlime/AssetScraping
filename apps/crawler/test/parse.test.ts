@@ -213,6 +213,50 @@ describe("parseHoldings（/accounts/show/{id} の「種類・名称」テーブ�
   });
 });
 
+describe("parseHoldings の assetCategory 推定（本家資産カテゴリ語彙）", () => {
+  it("銘柄名・口座カテゴリから assetCategory を付ける", () => {
+    const html = `
+    <table>
+      <thead><tr><th>名称</th><th>残高</th></tr></thead>
+      <tbody>
+        <tr><td>普通預金</td><td>35円</td></tr>
+        <tr><td>eMAXIS Slim 米国株式(S&P500)</td><td>110,000円</td></tr>
+      </tbody>
+    </table>`;
+    // SBIベネフィット（投信のみ）を想定: 口座カテゴリ other
+    const holdings = parseHoldings(html, "bf-1", { category: "other", accountName: "SBIベネフィット" });
+    expect(holdings[0]).toMatchObject({ name: "普通預金", assetCategory: "預金・現金" });
+    expect(holdings[1]).toMatchObject({ name: "eMAXIS Slim 米国株式(S&P500)", assetCategory: "投資信託" });
+  });
+
+  it("口座カテゴリ crypto / pension を資産カテゴリに写像する", () => {
+    const html = `<table><thead><tr><th>名称</th><th>残高</th></tr></thead><tbody><tr><td>円残高</td><td>101円</td></tr></tbody></table>`;
+    expect(parseHoldings(html, "cc-1", { category: "crypto", accountName: "Coincheck" })[0].assetCategory).toBe("暗号資産");
+    expect(parseHoldings(html, "nrk-1", { category: "pension", accountName: "NRK(確定拠出年金)" })[0].assetCategory).toBe("年金");
+  });
+
+  it("Suica / 楽天キャッシュを口座名から電子マネー・ポイントに分類する", () => {
+    const html = `<table><thead><tr><th>名称</th><th>残高</th></tr></thead><tbody><tr><td>メイン</td><td>1305円</td></tr></tbody></table>`;
+    expect(parseHoldings(html, "sc-1", { category: "other", accountName: "モバイルSuica" })[0].assetCategory).toBe("電子マネー・プリペイド");
+    expect(parseHoldings(html, "rk-1", { category: "other", accountName: "楽天市場" })[0].assetCategory).toBe("その他");
+  });
+
+  it("証券口座の非現金・非ファンド銘柄は株式(現物)", () => {
+    const html = `
+    <table>
+      <thead><tr><th>コード</th><th>銘柄</th><th>数量</th><th>残高</th></tr></thead>
+      <tbody><tr><td>7203</td><td>トヨタ自動車</td><td>100株</td><td>281,400円</td></tr></tbody>
+    </table>`;
+    const holdings = parseHoldings(html, "sb-1", { category: "securities", accountName: "SBI証券" });
+    expect(holdings[0].assetCategory).toBe("株式(現物)");
+  });
+
+  it("opts 未指定でもパースは壊れない（デフォルト other）", () => {
+    const html = `<table><thead><tr><th>名称</th><th>残高</th></tr></thead><tbody><tr><td>円残高</td><td>101円</td></tr></tbody></table>`;
+    expect(parseHoldings(html, "x-1")[0].assetCategory).toBe("その他");
+  });
+});
+
 describe("parseAssetHistory（/bs/history の資産推移テーブル）", () => {
   const html = `
   <html><body>

@@ -199,7 +199,52 @@ function parseQuantity(text: string): number | null {
  * - eq 形（コード/銘柄/数量/…/残高/…）: 株式
  * 1 ページに複数テーブルがある場合は合算する。対象テーブルが無い口座は空配列。
  */
-export function parseHoldings(html: string, accountId: string): Holding[] {
+/**
+ * 本家資産カテゴリ語彙（meta ASSET_CATEGORIES 準拠）への推定。
+ *
+ * 背景: ssnb /accounts/show の内訳テーブルには本家 portfolio.item.type 相当の
+ * 「資産カテゴリ」列が無いため、①口座名（電子マネー・ポイント系）→②口座カテゴリ
+ * （crypto/pension/bank/cash/point・本家 normalizePortfolioCategories の
+ * 暗号資産口座再分類に準拠）→③銘柄名（現金・預金系 → 投信 → 株式）の
+ * 優先順で推定する。判定不能は「その他」（本家 getOrCreateCategory が
+ * asset_categories を自動作成するため、語彙は本家に寄せる）。
+ */
+export function estimateAssetCategory(
+  name: string,
+  category?: AccountCategory,
+  accountName?: string,
+): string {
+  const lname = name.toLowerCase();
+  const laccount = (accountName ?? "").toLowerCase();
+
+  // 1) 口座名・銘柄名から電子マネー・ポイント系（他の語と掛からない最先頭）
+  if (/suica|pasmo|edy|nanaco|waon/.test(laccount) || /suica|pasmo|edy\b/.test(lname)) {
+    return "電子マネー・プリペイド";
+  }
+  if (/point|ポイント|マイル/.test(laccount) || /ポイント|マイル/.test(lname)) {
+    return "ポイント";
+  }
+
+  // 2) 口座カテゴリで一意に決まるもの
+  if (category === "crypto") return "暗号資産";
+  if (category === "pension") return "年金";
+  if (category === "bank" || category === "cash") return "預金・現金";
+  if (category === "point") return "ポイント";
+
+  // 3) 銘柄名ベース（現金・預金系を投信より先に判定する）
+  if (/現金|預金|普通|当座|定期|支店/.test(name)) return "預金・現金";
+  if (/ファンド|投資信託|投信|emaxis|s&p500|インデックス|日経/.test(lname)) {
+    return "投資信託";
+  }
+  if (category === "securities") return "株式(現物)";
+  return "その他";
+}
+
+export function parseHoldings(
+  html: string,
+  accountId: string,
+  opts?: { category?: AccountCategory; accountName?: string },
+): Holding[] {
   const root = parse(html);
   const scrapedAt = new Date().toISOString();
 
@@ -226,6 +271,7 @@ export function parseHoldings(html: string, accountId: string): Holding[] {
       holdings.push({
         accountId,
         name,
+        assetCategory: estimateAssetCategory(name, opts?.category, opts?.accountName),
         quantity,
         value,
         averagePrice,
