@@ -14,6 +14,8 @@ import {
   assetHistory,
   cashFlowPeriods,
   dailySnapshots,
+  groupAccounts,
+  groups,
   holdingValues,
   holdings,
   transactions,
@@ -461,6 +463,43 @@ export interface CashFlowPeriodInput {
   periodStart: string;
   periodEnd: string;
   transactionCount: number;
+}
+
+/**
+ * crawler 用 default group seeding。
+ * 本家 queries は groupId 前提のため、crawler 側で固定 "default" グループを保証する。
+ */
+export const DEFAULT_GROUP_ID = "default";
+
+/** groups に固定 default 行を冪等 upsert する */
+export function ensureDefaultGroup(db: Database): void {
+  const ts = nowIso();
+  db
+    .insert(groups)
+    .values({
+      id: DEFAULT_GROUP_ID,
+      name: DEFAULT_GROUP_ID,
+      isCurrent: true,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+    .onConflictDoUpdate({
+      target: groups.id,
+      set: { isCurrent: true, updatedAt: ts },
+    })
+    .run();
+}
+
+/** 全 accounts を default group に冪等リンクする */
+export function linkAllAccountsToDefaultGroup(db: Database): void {
+  const accountIds = db.select({ id: accounts.id }).from(accounts).all();
+  if (accountIds.length === 0) return;
+  const ts = nowIso();
+  db
+    .insert(groupAccounts)
+    .values(accountIds.map((a) => ({ groupId: DEFAULT_GROUP_ID, accountId: a.id, createdAt: ts, updatedAt: ts })))
+    .onConflictDoNothing()
+    .run();
 }
 
 /**
