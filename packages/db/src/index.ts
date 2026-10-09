@@ -42,6 +42,7 @@ export {
   upsertAccounts,
 } from "./repositories/accounts.ts";
 export * from "./repositories/categories.ts";
+export * from "./repositories/settings.ts";
 export * from "./repositories/groups.ts";
 export * from "./repositories/holdings.ts";
 export * from "./repositories/institution-categories.ts";

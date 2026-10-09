@@ -11,6 +11,17 @@ import {
 // 本家 mf-dashboard 互換テーブル（追加のみ。既存テーブル・列は変更しない）
 // ============================================================================
 
+/**
+ * 設定タブ用 key-value ストア。定期更新時刻・残高しきい値・ssnb 認証情報。
+ * crawler が唯一の writer（web は proxy、mcp は read-only）。
+ */
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const groups = sqliteTable("groups", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
