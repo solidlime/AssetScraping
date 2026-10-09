@@ -6,7 +6,7 @@ import type {
   Holding,
   Transaction,
 } from "@asset-scraping/shared";
-import { and, desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "./client.ts";
 import {
   accounts,
@@ -18,6 +18,7 @@ import {
   groups,
   holdingValues,
   holdings,
+  institutionCategories,
   transactions,
 } from "./schema.ts";
 
@@ -488,6 +489,126 @@ export function ensureDefaultGroup(db: Database): void {
       set: { isCurrent: true, updatedAt: ts },
     })
     .run();
+}
+
+// ---------------------------------------------------------------------------
+// institution_categories seed + accounts.category_id 自動割当
+// ---------------------------------------------------------------------------
+
+/**
+ * 本家 mf-dashboard packages/db/src/seed/accounts.ts institutionCategoryDefs の移植。
+ * displayOrder も本家値を維持する（web のカテゴリ表示順が本家と同じになる）。
+ */
+export interface InstitutionCategoryDef {
+  name: string;
+  order: number;
+}
+
+export const INSTITUTION_CATEGORY_DEFS: InstitutionCategoryDef[] = [
+  { name: "銀行", order: 1 },
+  { name: "証券", order: 2 },
+  { name: "暗号資産・FX・貴金属", order: 3 },
+  { name: "カード", order: 4 },
+  { name: "年金", order: 5 },
+  { name: "電子マネー・プリペイド", order: 6 },
+  { name: "ポイント", order: 7 },
+  { name: "携帯", order: 8 },
+  { name: "通販", order: 9 },
+  { name: "貯蓄", order: 10 },
+];
+
+/** 判定不能だった口座の割当先（本家 defs に無い追加カテゴリ。bs 集計から漏れさせない） */
+export const OTHER_INSTITUTION_CATEGORY = "その他";
+
+/**
+ * institution_categories に本家 seed + 「その他」を冪等投入する。
+ * 本家 seed.ts の「機関カテゴリ」節相当（crawler の scrape 時に毎回保証する）。
+ * 戻り値は投入後の全カテゴリ行数。
+ */
+export function ensureInstitutionCategories(db: Database): number {
+  const ts = nowIso();
+  const defs: InstitutionCategoryDef[] = [
+    ...INSTITUTION_CATEGORY_DEFS,
+    { name: OTHER_INSTITUTION_CATEGORY, order: INSTITUTION_CATEGORY_DEFS.length + 1 },
+  ];
+  db
+    .insert(institutionCategories)
+    .values(
+      defs.map((d) => ({
+        name: d.name,
+        displayOrder: d.order,
+        createdAt: ts,
+        updatedAt: ts,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: institutionCategories.name,
+      set: { displayOrder: sql`excluded.display_order`, updatedAt: ts },
+    })
+    .run();
+  return db.select({ id: institutionCategories.id }).from(institutionCategories).all().length;
+}
+
+/**
+ * 金融機関名 → 本家カテゴリ名の推定。
+ * 本家は MF 画面側の見出し（.heading-category-name）から取るため推定不要だが、
+ * ssnb には画面上のカテゴリ見出しが無いため内容ベースで写像する。
+ * 判定不能は null（呼び出し側で OTHER_INSTITUTION_CATEGORY にフォールバック）。
+ */
+const INSTITUTION_CATEGORY_KEYWORDS: Array<[string, string[]]> = [
+  ["銀行", ["銀行", "労働金庫", "労金", "信用金庫", "信金", "ＳＭＢＣ", "smtb"]],
+  ["年金", ["確定拠出年金", "ideco", "ideco", "年金"]],
+  ["暗号資産・FX・貴金属", ["coincheck", "zaif", "bitflyer", "gmoコイン", "暗号資産", "仮想通貨"]],
+  ["証券", ["証券", "楽天ｓ", "raKuten securities"]],
+  ["ポイント", ["ポイント", "楽天市場", "rakuten"]],
+  ["電子マネー・プリペイド", ["suica", "メルペイ", "nanaco", "waon", "楽天キャッシュ"]],
+  ["携帯", ["docomo", "ドコモ", "ahamo", "au", "楽天モバイル"]],
+  ["カード", ["カード", "card"]],
+];
+
+export function guessInstitutionCategory(institution: string): string | null {
+  const normalized = institution.toLowerCase();
+  for (const [name, keywords] of INSTITUTION_CATEGORY_KEYWORDS) {
+    if (keywords.some((k) => normalized.includes(k))) return name;
+  }
+  return null;
+}
+
+/**
+ * accounts.category_id が null の行だけを institution 名マッチ → 推定で自動割当する。
+ * 既存の category_id は保持する（本家 updateAccountCategory は明示上書き用、こちらは初期填充用）。
+ * 戻り値は割当した行数。
+ */
+export function assignAccountCategories(db: Database): number {
+  const cats = db
+    .select({ id: institutionCategories.id, name: institutionCategories.name })
+    .from(institutionCategories)
+    .all();
+  if (cats.length === 0) return 0;
+
+  const byName = new Map(cats.map((c) => [c.name, c.id]));
+  const otherId = byName.get(OTHER_INSTITUTION_CATEGORY);
+  const rows = db
+    .select({ id: accounts.id, institution: accounts.institution })
+    .from(accounts)
+    .where(isNull(accounts.categoryId))
+    .all();
+
+  const ts = nowIso();
+  let assigned = 0;
+  for (const row of rows) {
+    const guessed = guessInstitutionCategory(row.institution);
+    const categoryId =
+      (guessed !== null ? byName.get(guessed) : undefined) ?? otherId ?? null;
+    if (categoryId === null) continue;
+    db
+      .update(accounts)
+      .set({ categoryId, updatedAt: ts })
+      .where(eq(accounts.id, row.id))
+      .run();
+    assigned++;
+  }
+  return assigned;
 }
 
 /** 全 accounts を default group に冪等リンクする */
