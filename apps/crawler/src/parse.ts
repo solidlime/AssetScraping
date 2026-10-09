@@ -80,44 +80,45 @@ export function parseDate(text: string, now: Date = new Date()): string | null {
 // 口座一覧・残高
 // ---------------------------------------------------------------------------
 
+/** セルテキストの正規化（改行・複数空白 → 単一空白、前後平方トリム） */
+function cellText(cell: { text: string } | undefined): string {
+  return cell ? cell.text.replace(/\s+/g, " ").trim() : "";
+}
+
+/**
+ * 口座一覧（/accounts の構造化テーブル）を parse する。実測（2026-10）:
+ * - 各行 td[0] に a[href="/accounts/show/{id}"]（金融機関名テキスト）、td[1] に残高（"35円" 形式）
+ */
 export function parseAccounts(html: string): Array<Account & { status: AccountStatus }> {
   const root = parse(html);
   const results: Array<Account & { status: AccountStatus }> = [];
   const scrapedAt = new Date().toISOString();
-
-  // 口座行: a[href*="/accounts/"] を含む行（li / tr）を候補にする
-  const links = root.querySelectorAll('a[href*="/accounts/"]');
   const seen = new Set<string>();
 
-  for (const link of links) {
+  for (const link of root.querySelectorAll('a[href*="/accounts/show/"]')) {
     const href = link.getAttribute("href") ?? "";
-    const idMatch = /\/accounts\/([^/?#]+)/.exec(href);
-    const id = idMatch?.[1];
+    const id = /\/accounts\/show\/([^/?#]+)/.exec(href)?.[1];
     if (!id || seen.has(id)) continue;
-    if (id === "new" || id === "edit") continue;
 
-    // 行要素（li / tr / div.row）まで遡る
-    const row = link.closest("li, tr") ?? link;
-    const rowText = row.text.replace(/\s+/g, " ").trim();
-    const name = link.text.replace(/\s+/g, " ").trim() || rowText.slice(0, 40);
-    if (!name) continue;
-
-    const balance = parseYen(rowText);
-    if (balance === null) continue;
+    const row = link.closest("tr");
+    const tds = row ? row.querySelectorAll("td") : [];
+    if (tds.length < 2) continue;
+    const name = cellText(tds[0]);
+    const balance = parseYen(cellText(tds[1]));
+    if (!name || balance === null) continue;
 
     seen.add(id);
-    const institutionHint = rowText;
     results.push({
       id,
       name,
-      institution: institutionHint.split(" ")[0] ?? "",
-      category: guessCategory(rowText),
+      institution: cellText(link) || name,
+      category: guessCategory(name),
       status: { accountId: id, balance, scrapedAt },
     });
   }
 
   if (results.length === 0) {
-    throw new ScrapeParseError("口座一覧（/accounts/ リンク）が 1 件も見つかりません");
+    throw new ScrapeParseError("口座一覧テーブル（/accounts/show/ リンク付き行）が 1 件も見つかりません");
   }
   return results;
 }
@@ -126,34 +127,39 @@ export function parseAccounts(html: string): Array<Account & { status: AccountSt
 // 保有資産
 // ---------------------------------------------------------------------------
 
+/**
+ * 口座別残高内訳（/accounts/show/{id}、「種類・名称」ヘッダのテーブルのみ）を parse する。
+ * 実測（2026-10）: th ヘッダ「種類・名称 / 残高」、各行 [名称, "35円"]。数量・単価・含み損益は取れない。
+ * 対象テーブルが無い（現金口座など）場合は空配列。
+ */
 export function parseHoldings(html: string, accountId: string): Holding[] {
   const root = parse(html);
   const scrapedAt = new Date().toISOString();
-  const rows = root.querySelectorAll("table tr");
-  const holdings: Holding[] = [];
+  const table = root
+    .querySelectorAll("table")
+    .find((t) =>
+      t.querySelectorAll("th").some((th) => cellText(th) === "種類・名称"),
+    );
+  if (!table) return [];
 
-  for (const row of rows) {
-    const cells = row.querySelectorAll("td, th");
-    if (cells.length < 2) continue;
-    const texts = cells.map((c) => c.text.replace(/\s+/g, " ").trim());
-    const name = texts[0] ?? "";
+  const holdings: Holding[] = [];
+  for (const row of table.querySelectorAll("tr")) {
+    const tds = row.querySelectorAll("td");
+    if (tds.length < 2) continue;
+    const name = cellText(tds[0]);
     if (!name || /^(合計|小計|total)/i.test(name)) continue;
-    const value = parseYen(texts[1] ?? "");
+    const value = parseYen(cellText(tds[1]));
     if (value === null) continue;
-    const quantity = parseYen(texts[2] ?? "") ?? 0;
-    const averagePrice = parseYen(texts[3] ?? "");
-    const unrealized = parseYen(texts[4] ?? "");
     holdings.push({
       accountId,
       name,
-      quantity,
+      quantity: 0,
       value,
-      averagePrice,
-      unrealizedGain: unrealized,
+      averagePrice: null,
+      unrealizedGain: null,
       scrapedAt,
     });
   }
-
   return holdings;
 }
 
