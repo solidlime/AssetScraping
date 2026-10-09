@@ -1,6 +1,6 @@
 # Asset Scraping — docker compose
 # crawler のみ .env を読む（認証情報はコンテナへ注入、ホストには出さない）
-# mcp は compose 外の独立イメージ（README の mcpServers 設定例を参照）
+# mcp は Streamable HTTP（:26280）で常駐。stdio クライアントは README の mcpServers 設定例を参照
 services:
   crawler:
     build:
@@ -48,6 +48,23 @@ services:
       - "8765:8765"
     depends_on:
       - crawler
+    restart: unless-stopped
+
+  # MCP サーバー（Streamable HTTP）。`http://localhost:26280/mcp` で待ち受け。
+  # DB は read-only（crawler が書き込む volume を ro マウント）。
+  mcp:
+    build:
+      context: .
+      dockerfile: apps/mcp/Dockerfile
+    image: asset-scraping-mcp
+    environment:
+      - MCP_TRANSPORT=http
+      - PORT=26280
+      - DB_PATH=/data/asset-scraping.db
+    volumes:
+      - mfb-data:/data:ro
+    ports:
+      - "26280:26280"
     restart: unless-stopped
 
 volumes:
