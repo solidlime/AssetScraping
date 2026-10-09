@@ -12,6 +12,7 @@ import {
   accounts,
   accountStatuses,
   assetHistory,
+  cashFlowPeriods,
   dailySnapshots,
   holdingValues,
   holdings,
@@ -451,6 +452,72 @@ export function getMonthlySummary(
     expense: Number(r.expense),
     net: Number(r.income) - Number(r.expense),
   }));
+}
+
+/** 月次収支 1行分（本家 cash_flow_periods 集計 + 収入/支出/収支） */
+export interface CashFlowPeriodInput {
+  /** YYYY-MM */
+  month: string;
+  periodStart: string;
+  periodEnd: string;
+  transactionCount: number;
+}
+
+/**
+ * 本家互換 cash_flow_periods の冪等 upsert（月単位、既存月は再計算で上書き）。
+ * crawler が transactions 保存後に呼び出す。本家 queries は month で駆動する。
+ */
+export function upsertCashFlowPeriods(
+  db: Database,
+  periods: CashFlowPeriodInput[],
+): number {
+  if (periods.length === 0) return 0;
+  const ts = nowIso();
+  db.transaction((tx) => {
+    for (const p of periods) {
+      tx
+        .insert(cashFlowPeriods)
+        .values({ ...p, createdAt: ts, updatedAt: ts })
+        .onConflictDoUpdate({
+          target: cashFlowPeriods.month,
+          set: {
+            periodStart: p.periodStart,
+            periodEnd: p.periodEnd,
+            transactionCount: p.transactionCount,
+            updatedAt: ts,
+          },
+        })
+        .run();
+    }
+  });
+  return periods.length;
+}
+
+/**
+ * transactions から月次 periods を集計して cash_flow_periods に冪等 upsert する。
+ * 既存月は再計算で上書き。戻り値は書き込み件数（月数）。
+ */
+export function regenerateCashFlowPeriods(db: Database): number {
+  const rows = db
+    .select({
+      month: sql<string>`substr(${transactions.date}, 1, 7)`.as("month"),
+      periodStart: sql<string>`min(${transactions.date})`.as("period_start"),
+      periodEnd: sql<string>`max(${transactions.date})`.as("period_end"),
+      transactionCount: sql<number>`count(*)`.as("transaction_count"),
+    })
+    .from(transactions)
+    .groupBy(sql`substr(${transactions.date}, 1, 7)`)
+    .all();
+
+  return upsertCashFlowPeriods(
+    db,
+    rows.map((r) => ({
+      month: r.month,
+      periodStart: r.periodStart,
+      periodEnd: r.periodEnd,
+      transactionCount: Number(r.transactionCount),
+    })),
+  );
 }
 
 /** 直近スクレイプ日時（account_statuses.scraped_at の最大値） */
