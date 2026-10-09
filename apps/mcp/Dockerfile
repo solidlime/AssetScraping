@@ -34,4 +34,4 @@ ENV DB_PATH=file:/data/asset-scraping.db?mode=ro
 # MCP_TRANSPORT 未指定（デフォルト stdio）: `docker run -i --rm ...` で従来どおり動く。
 # 常駐サーバーは compose.yml の mcp サービス（MCP_TRANSPORT=http, :26280）を使う。
 EXPOSE 26280
-CMD ["node_modules/.bin/tsx", "apps/mcp/src/index.ts"]
+CMD ["apps/mcp/node_modules/.bin/tsx", "apps/mcp/src/index.ts"]
