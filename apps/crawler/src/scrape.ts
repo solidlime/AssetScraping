@@ -7,7 +7,9 @@
  */
 import {
   createDb,
+  assignAccountCategories,
   ensureDefaultGroup,
+  ensureInstitutionCategories,
   linkAllAccountsToDefaultGroup,
   regenerateCashFlowPeriods,
   todayJst,
@@ -58,8 +60,10 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
   const session: Session = await getSession();
   const fetcher = new FetchPage(session.page);
 
-  // 0) 本家 queries は groupId 前提のため、default group を最初に保証する
+  // 0) 本家 queries は groupId 前提のため、default group を最初に保証する。
+  // 本家 seed の「機関カテゴリ」節相当もここで保証する（bs/cf のカテゴリ集計の前提）。
   ensureDefaultGroup(db);
+  ensureInstitutionCategories(db);
 
   try {
     // 1) 口座一覧・残高（/accounts の構造化テーブル）
@@ -103,10 +107,13 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     upsertTransactions(db, txs);
     stats.transactionsUpserted = txs.length;
 
-    // 5) 本家互換派生テーブル: holding_values / cash_flow_periods / group_accounts
+    // 5) 本家互換派生テーブル: holding_values / cash_flow_periods / group_accounts。
+    // institution_categories が確定した時点で accounts.category_id を自動割当する
+    // （null のみ。既存の割当は保持）。bs のバランスシート・cf のカテゴリ内訳の前提。
     upsertHoldingValues(db, holdingsRows, todayJst());
     regenerateCashFlowPeriods(db);
     linkAllAccountsToDefaultGroup(db);
+    assignAccountCategories(db);
 
     // storageState を更新（セッション延命）
     if (session.didFullLogin) {
