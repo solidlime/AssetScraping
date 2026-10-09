@@ -43,10 +43,13 @@ RUN npx playwright@1.50.1 install --with-deps chromium
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY --from=deps /app /app
 COPY --from=build /app/apps/crawler /app/apps/crawler
+COPY --from=build /app/packages/db/src /app/packages/db/src
+COPY --from=build /app/packages/shared/src /app/packages/shared/src
+COPY --from=build /app/tsconfig.base.json /app/tsconfig.base.json
 COPY apps/crawler/docker/crontab /app/docker/crontab
 ENV DB_PATH=/data/asset-scraping.db \
     AUTH_STATE_PATH=/data/auth-state.json \
     PORT=8766
 EXPOSE 8766
 # 常駐: 手動更新 API。cron は supercronic が index.ts を叩く
-CMD ["sh", "-c", "supercronic /app/docker/crontab & exec node_modules/.bin/tsx src/server.ts"]
+CMD ["sh", "-c", "supercronic /app/docker/crontab & cd /app/apps/crawler && exec node_modules/.bin/tsx src/server.ts"]
