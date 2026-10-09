@@ -131,38 +131,104 @@ export function parseAccounts(html: string): Array<Account & { status: AccountSt
 // 保有資産
 // ---------------------------------------------------------------------------
 
+/** 保有資産テーブルの列レイアウト（実測 2026-10 の 3 形態） */
+interface HoldingsColumns {
+  nameIdx: number;
+  valueIdx: number;
+  quantityIdx: number | null;
+  averagePriceIdx: number | null;
+  unrealizedGainIdx: number | null;
+}
+
+const NONE: HoldingsColumns = {
+  nameIdx: -1,
+  valueIdx: -1,
+  quantityIdx: null,
+  averagePriceIdx: null,
+  unrealizedGainIdx: null,
+};
+
 /**
- * 口座別残高内訳（/accounts/show/{id}、「種類・名称」ヘッダのテーブルのみ）を parse する。
- * 実測（2026-10）: th ヘッダ「種類・名称 / 残高」、各行 [名称, "35円"]。数量・単価・含み損益は取れない。
- * 対象テーブルが無い（現金口座など）場合は空配列。
+ * ヘッダ th から列位置を決める。本家 portfolio.ts の resolveDepositColumns と同様、
+ * ラベル表記ゆれ（種類・名称/名称、残高/評価額）は列名表引きで吸収する。
+ * - depo 形: 種類・名称 | 残高
+ * - 名称形: 名称 | 残高
+ * - pns 形: 種類・名称 | 平均取得価格 | 評価額 | 取得価額 | 評価損益 | 評価損益率
+ * - eq 形: コード | 銘柄 | 数量 | 平均取得価格 | 単価 | 残高 | …（name ラベルは「銘柄」）
+ */
+export function resolveHoldingsColumns(headers: string[]): HoldingsColumns {
+  const indexOf = (labels: string[]): number =>
+    headers.findIndex((h) => labels.includes(h));
+  const name = indexOf(["種類・名称", "名称", "銘柄"]);
+  if (name < 0) return NONE;
+  // 金額列: 残高があれば優先、無ければ 評価額（pns 形）
+  const balance = headers.indexOf("残高");
+  const evaluation = headers.indexOf("評価額");
+  const value = balance >= 0 ? balance : evaluation;
+  if (value < 0) return NONE;
+  const quantity = headers.findIndex((h) => h === "数量");
+  const avgCost = indexOf(["平均取得価格"]);
+  // 評価損益: pns/eq 形で「含み損益」または「評価損益」の列
+  const gain = indexOf(["含み損益", "評価損益"]);
+  return {
+    nameIdx: name,
+    valueIdx: value,
+    quantityIdx: quantity,
+    averagePriceIdx: avgCost,
+    unrealizedGainIdx: gain >= 0 ? gain : null,
+  };
+}
+
+/** 数量セル（"100株" / "52.3491口" / "0.0321"）→ number。解釈不可は null */
+function parseQuantity(text: string): number | null {
+  const m = /(-?[\d,]+(?:\.\d+)?)/.exec(text.replace(/\s/g, ""));
+  if (!m) return null;
+  const n = Number(m[1]?.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 口座別残高内訳（/accounts/show/{id}）の保有資産テーブル群を parse する。
+ * 実測（2026-10）の 3 形態に対応:
+ * - depo 形（種類・名称/残高）: 銀行・カード等。数量・単価は取れない
+ * - pns 形（種類・名称/平均取得価格/評価額/…）: 年金・保険
+ * - eq 形（コード/銘柄/数量/…/残高/…）: 株式
+ * 1 ページに複数テーブルがある場合は合算する。対象テーブルが無い口座は空配列。
  */
 export function parseHoldings(html: string, accountId: string): Holding[] {
   const root = parse(html);
   const scrapedAt = new Date().toISOString();
-  const table = root
-    .querySelectorAll("table")
-    .find((t) =>
-      t.querySelectorAll("th").some((th) => cellText(th) === "種類・名称"),
-    );
-  if (!table) return [];
 
   const holdings: Holding[] = [];
-  for (const row of table.querySelectorAll("tr")) {
-    const tds = row.querySelectorAll("td");
-    if (tds.length < 2) continue;
-    const name = cellText(tds[0]);
-    if (!name || /^(合計|小計|total)/i.test(name)) continue;
-    const value = parseYen(cellText(tds[1]));
-    if (value === null) continue;
-    holdings.push({
-      accountId,
-      name,
-      quantity: 0,
-      value,
-      averagePrice: null,
-      unrealizedGain: null,
-      scrapedAt,
-    });
+  for (const table of root.querySelectorAll("table")) {
+    const headers = table.querySelectorAll("th").map((th) => headerKey(cellText(th)));
+    if (headers.length === 0) continue;
+    const cols = resolveHoldingsColumns(headers);
+    if (cols === NONE) continue;
+
+    for (const row of table.querySelectorAll("tr")) {
+      const tds = row.querySelectorAll("td");
+      if (tds.length < 2) continue;
+      const name = cellText(tds[cols.nameIdx]);
+      if (!name || /^(合計|小計|total)/i.test(name)) continue;
+      const value = parseYen(cellText(tds[cols.valueIdx]));
+      if (value === null) continue;
+      const quantity =
+        cols.quantityIdx !== null ? (parseQuantity(cellText(tds[cols.quantityIdx])) ?? 0) : 0;
+      const averagePrice =
+        cols.averagePriceIdx !== null ? parseYen(cellText(tds[cols.averagePriceIdx])) : null;
+      const unrealizedGain =
+        cols.unrealizedGainIdx !== null ? parseYen(cellText(tds[cols.unrealizedGainIdx])) : null;
+      holdings.push({
+        accountId,
+        name,
+        quantity,
+        value,
+        averagePrice,
+        unrealizedGain,
+        scrapedAt,
+      });
+    }
   }
   return holdings;
 }

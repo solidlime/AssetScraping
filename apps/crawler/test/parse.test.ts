@@ -134,6 +134,53 @@ describe("parseHoldings（/accounts/show/{id} の「種類・名称」テーブ�
   it("種類・名称テーブルが無いページ（tmp 側の情報系テーブルだけ）は空配列", () => {
     expect(parseHoldings("<table><tr><th>月</th><td>10月</td></tr></table>", "acc-1")).toEqual([]);
   });
+
+  it("pns 形（評価額ヘッダ）テーブルを name=種類・名称 / value=評価額 で parse する（年金・保険口座）", () => {
+    const html = `
+    <table>
+      <thead><tr><th>種類・名称</th><th>平均取得価格</th><th>評価額</th><th>取得価額</th><th>評価損益</th><th>評価損益率</th></tr></thead>
+      <tbody>
+        <tr><td>eMAXIS Slim バランス(8資産)</td><td>850,000円</td><td>1,004,921円</td><td>800,000円</td><td>204,921円</td><td>25.62%</td></tr>
+      </tbody>
+    </table>`;
+    const holdings = parseHoldings(html, "pension-1");
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0]).toMatchObject({
+      accountId: "pension-1",
+      name: "eMAXIS Slim バランス(8資産)",
+      value: 1004921,
+      averagePrice: 850000,
+      unrealizedGain: 204921,
+    });
+  });
+
+  it("eq 形（株式 10 列）テーブルを残高・数量・平均取得価格列から parse する", () => {
+    const html = `
+    <table>
+      <thead><tr><th>コード</th><th>銘柄</th><th>数量</th><th>平均取得価格</th><th>単価</th><th>残高</th><th>前日比</th><th>含み損益</th><th>含み損益率</th><th>保有金融機関</th></tr></thead>
+      <tbody>
+        <tr><td>7203</td><td>トヨタ自動車</td><td>100株</td><td>2,493円</td><td>2,814円</td><td>281,400円</td><td>+2,800円</td><td>32,100円</td><td>12.88%</td><td>SBI証券</td></tr>
+      </tbody>
+    </table>`;
+    const holdings = parseHoldings(html, "sec-1");
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0]).toMatchObject({
+      name: "トヨタ自動車",
+      value: 281400,
+      quantity: 100,
+      averagePrice: 2493,
+      unrealizedGain: 32100,
+    });
+  });
+
+  it("「名称」ラベルのテーブルも受け、複数テーブルは合算する", () => {
+    const html = `
+    <table><tr><th>名称</th><th>残高</th></tr><tr><td>米ドル 現金</td><td>35,713円</td></tr></table>
+    <table><tr><th>名称</th><th>残高</th></tr><tr><td>現金（AI投資）</td><td>2,446円</td></tr></table>`;
+    const holdings = parseHoldings(html, "sec-2");
+    expect(holdings.map((h) => h.name)).toEqual(["米ドル 現金", "現金（AI投資）"]);
+    expect(holdings.map((h) => h.value)).toEqual([35713, 2446]);
+  });
 });
 
 describe("parseAssetHistory（/bs/history の資産推移テーブル）", () => {
