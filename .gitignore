@@ -35,3 +35,6 @@ data/*.db
 
 # TS incremental build artifacts
 *.tsbuildinfo
+
+# pi session artifacts
+.pi/
