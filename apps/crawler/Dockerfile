@@ -44,6 +44,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY --from=deps /app /app
 COPY --from=build /app/apps/crawler /app/apps/crawler
 COPY --from=build /app/packages/db/src /app/packages/db/src
+COPY --from=build /app/packages/db/drizzle /app/packages/db/drizzle
 COPY --from=build /app/packages/shared/src /app/packages/shared/src
 COPY --from=build /app/tsconfig.base.json /app/tsconfig.base.json
 COPY apps/crawler/docker/crontab /app/docker/crontab
