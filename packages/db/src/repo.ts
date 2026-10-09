@@ -6,13 +6,14 @@ import type {
   Holding,
   Transaction,
 } from "@asset-scraping/shared";
-import { desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import type { Database } from "./client.ts";
 import {
   accounts,
   accountStatuses,
   assetHistory,
   dailySnapshots,
+  holdingValues,
   holdings,
   transactions,
 } from "./schema.ts";
@@ -25,6 +26,115 @@ const nowIso = () => new Date().toISOString();
 export function todayJst(now: Date = new Date()): string {
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   return jst.toISOString().slice(0, 10);
+}
+
+/**
+ * 本家互換 holding_values の upsert（holdingId×snapshotId）。
+ * crawler が scrape 後に呼び出し、holdings 現行値から評価額系派生列を算出する。
+ * - amount: 評価額（holdings.value を円丸め）
+ * - unitPrice / avgCostPrice: quantity>0 のとき value/quantity・平均取得単価
+ * - unrealizedGain / unrealizedGainPct: avgCostPrice から（本家準拠）
+ * - dailyChange: 前日 holding_values（同 holding の直近別日付 snapshot）との差分。初日は null
+ * snapshot（当日分）が無い holding は skip する（戻り値は書き込み件数）。
+ */
+export interface UpsertHoldingValuesResult {
+  written: number;
+  skipped: number;
+}
+
+export function upsertHoldingValues(
+  db: Database,
+  rows: Holding[],
+  date: string,
+): UpsertHoldingValuesResult {
+  if (rows.length === 0) return { written: 0, skipped: 0 };
+  const ts = nowIso();
+
+  const result = db.transaction((tx): UpsertHoldingValuesResult => {
+    // 各 holdingId の「前日の dailyChange 計算元」を先に取得する（書き込みで自己参照しない）
+    let written = 0;
+    let skipped = 0;
+
+    for (const h of rows) {
+      const holding = tx
+        .select({ id: holdings.id })
+        .from(holdings)
+        .where(and(eq(holdings.accountId, h.accountId), eq(holdings.name, h.name)))
+        .get();
+      const snapshot = tx
+        .select({ id: dailySnapshots.id })
+        .from(dailySnapshots)
+        .where(and(eq(dailySnapshots.accountId, h.accountId), eq(dailySnapshots.date, date)))
+        .get();
+
+      if (!holding || !snapshot) {
+        skipped++;
+        continue;
+      }
+
+      // 前日比: 同 holding の別日付 holding_values のうち最も近い過去日付の amount
+      const prev = tx
+        .select({
+          amount: holdingValues.amount,
+          date: dailySnapshots.date,
+        })
+        .from(holdingValues)
+        .innerJoin(dailySnapshots, eq(dailySnapshots.id, holdingValues.snapshotId))
+        .where(and(eq(holdingValues.holdingId, holding.id), lt(dailySnapshots.date, date)))
+        .orderBy(desc(dailySnapshots.date))
+        .limit(1)
+        .get();
+
+      const amount = Math.round(h.value);
+      const dailyChange = prev ? amount - prev.amount : null;
+
+      const unitPrice = h.quantity > 0 ? h.value / h.quantity : null;
+      const avgCostPrice = h.averagePrice;
+      const unrealizedGain =
+        avgCostPrice !== null && unitPrice !== null
+          ? Math.round((unitPrice - avgCostPrice) * h.quantity)
+          : (h.unrealizedGain ?? null);
+      const unrealizedGainPct =
+        avgCostPrice !== null && avgCostPrice > 0 && unitPrice !== null
+          ? ((unitPrice - avgCostPrice) / avgCostPrice) * 100
+          : null;
+
+      tx
+        .insert(holdingValues)
+        .values({
+          holdingId: holding.id,
+          snapshotId: snapshot.id,
+          amount,
+          quantity: h.quantity,
+          unitPrice,
+          avgCostPrice,
+          dailyChange,
+          unrealizedGain,
+          unrealizedGainPct,
+          createdAt: ts,
+          updatedAt: ts,
+        })
+        .onConflictDoUpdate({
+          target: [holdingValues.holdingId, holdingValues.snapshotId],
+          set: {
+            amount,
+            quantity: h.quantity,
+            unitPrice,
+            avgCostPrice,
+            dailyChange,
+            unrealizedGain,
+            unrealizedGainPct,
+            updatedAt: ts,
+          },
+        })
+        .run();
+      written++;
+    }
+
+    return { written, skipped };
+  });
+
+  return result;
 }
 
 export interface UpsertAccountInput {
