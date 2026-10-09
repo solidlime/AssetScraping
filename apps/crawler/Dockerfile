@@ -27,7 +27,8 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY apps/crawler/package.json apps/crawler/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @asset-scraping/crawler --filter @asset-scraping/db --filter @asset-scraping/shared
+COPY packages/date-utils/package.json packages/date-utils/
+RUN pnpm install --frozen-lockfile --filter @asset-scraping/crawler --filter @asset-scraping/db --filter @asset-scraping/shared --filter @asset-scraping/date-utils
 
 # --- build (typecheck のみ。runtime は tsx で実行するため JS ビルド不要) ---
 FROM deps AS build
@@ -35,6 +36,7 @@ COPY tsconfig.base.json ./
 COPY apps/crawler apps/crawler
 COPY packages/db packages/db
 COPY packages/shared packages/shared
+COPY packages/date-utils packages/date-utils
 RUN pnpm --filter @asset-scraping/crawler typecheck
 
 # --- runtime ---
@@ -46,6 +48,7 @@ COPY --from=build /app/apps/crawler /app/apps/crawler
 COPY --from=build /app/packages/db/src /app/packages/db/src
 COPY --from=build /app/packages/db/drizzle /app/packages/db/drizzle
 COPY --from=build /app/packages/shared/src /app/packages/shared/src
+COPY --from=build /app/packages/date-utils/src /app/packages/date-utils/src
 COPY --from=build /app/tsconfig.base.json /app/tsconfig.base.json
 COPY apps/crawler/docker/crontab /app/docker/crontab
 COPY apps/crawler/docker/login-web.sh /app/docker/login-web.sh

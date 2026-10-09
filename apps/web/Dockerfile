@@ -13,13 +13,15 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY apps/web/package.json apps/web/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @asset-scraping/web --filter @asset-scraping/db --filter @asset-scraping/shared
+COPY packages/date-utils/package.json packages/date-utils/
+RUN pnpm install --frozen-lockfile --filter @asset-scraping/web --filter @asset-scraping/db --filter @asset-scraping/shared --filter @asset-scraping/date-utils
 
 FROM deps AS build
 COPY tsconfig.base.json ./
 COPY apps/web apps/web
 COPY packages/db packages/db
 COPY packages/shared packages/shared
+COPY packages/date-utils packages/date-utils
 # next build には DB 参照が無い（全ページ force-dynamic）ので DB なしでビルド可能
 RUN pnpm --filter @asset-scraping/web build
 
