@@ -32,3 +32,6 @@ drizzle/meta
 data/*.db
 *.db-wal
 *.db-shm
+
+# TS incremental build artifacts
+*.tsbuildinfo
