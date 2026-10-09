@@ -7,18 +7,23 @@
  */
 import {
   createDb,
+  ensureDefaultGroup,
+  linkAllAccountsToDefaultGroup,
+  regenerateCashFlowPeriods,
   todayJst,
   upsertAccount,
   upsertAccountStatus,
   upsertAssetHistory,
   upsertDailySnapshot,
   upsertHoldings,
+  upsertHoldingValues,
   upsertTransactions,
   type Database,
 } from "@asset-scraping/db";
 import {
   SSNB_URLS,
   type AccountCategory,
+  type Holding,
   type ScrapeRun,
 } from "@asset-scraping/shared";
 import { closeSession, getSession, saveStorageState, type Session } from "./auth.js";
@@ -53,6 +58,9 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
   const session: Session = await getSession();
   const fetcher = new FetchPage(session.page);
 
+  // 0) 本家 queries は groupId 前提のため、default group を最初に保証する
+  ensureDefaultGroup(db);
+
   try {
     // 1) 口座一覧・残高（/accounts の構造化テーブル）
     const accountsHtml = await fetcher.fetch(SSNB_URLS.accounts);
@@ -74,10 +82,12 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     }
 
     // 2) 保有資産（口座別残高内訳: /accounts/show/{id}）
+    const holdingsRows: Holding[] = [];
     for (const acc of accounts) {
       const html = await fetcher.fetch(SSNB_URLS.accountShow(acc.id));
       const holdings = parseHoldings(html, acc.id);
       upsertHoldings(db, holdings);
+      holdingsRows.push(...holdings);
       stats.holdingsUpserted += holdings.length;
     }
 
@@ -92,6 +102,11 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     const txs = parseTransactions(cfHtml, accounts[0]?.id ?? "");
     upsertTransactions(db, txs);
     stats.transactionsUpserted = txs.length;
+
+    // 5) 本家互換派生テーブル: holding_values / cash_flow_periods / group_accounts
+    upsertHoldingValues(db, holdingsRows, todayJst());
+    regenerateCashFlowPeriods(db);
+    linkAllAccountsToDefaultGroup(db);
 
     // storageState を更新（セッション延命）
     if (session.didFullLogin) {
