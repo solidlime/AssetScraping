@@ -1,0 +1,6 @@
+# ssnb crawler cron (TZ=Asia/Tokyo は compose で設定)
+# 1日2回のみ（規約遵守）。ログは stdout に出す（docker logs で見える）
+CRON_TZ=Asia/Tokyo
+
+30 6 * * * cd /app && node_modules/.bin/tsx src/index.ts >> /proc/1/fd/1 2>&1
+30 15 * * * cd /app && node_modules/.bin/tsx src/index.ts >> /proc/1/fd/1 2>&1
