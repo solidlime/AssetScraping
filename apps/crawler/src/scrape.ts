@@ -1,5 +1,8 @@
 /**
  * スクレイパー本体: 口座一覧・残高 / 保有資産 / 資産推移 / 取引履歴。
+ * 実測（2026-10）に合わせた取得フロー:
+ *   口座一覧(/accounts) → 口座別内訳(/accounts/show/{id}) → 資産推移(/bs/history) → 取引(/cf)
+ * /cf は常に当月分のみ返す（月次パラメータ無効）ため、取引は実行ごとに 1 回取得する。
  * 取得したデータは packages/db のリポジトリで upsert する。
  */
 import {
@@ -27,28 +30,16 @@ import {
   parseTransactions,
 } from "./parse.js";
 
-/** 取引履歴を取得する月数（通常モード） */
-const RECENT_TRANSACTION_MONTHS = 2;
-
-function monthRange(months: number): Array<{ year: number; month: number }> {
-  const out: Array<{ year: number; month: number }> = [];
-  const now = new Date();
-  for (let i = 0; i < months; i++) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    out.push({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 });
-  }
-  return out;
-}
-
-/** 履歴遡行モードの上限月数（SSNB 本体が 24 ヶ月保存のため） */
-const HISTORY_MONTHS = 24;
-
 export interface RunScrapeOptions {
-  /** SCRAPE_MODE=history で 24 ヶ月遡行 */
+  /**
+   * 実測では /cf が当月分しか返さないため履歴遡行は不可。
+   * SCRAPE_MODE=history 互換のため残置するが、挙動は通常モードと同一。
+   */
   history?: boolean;
 }
 
 export async function runScrape(db: Database, options: RunScrapeOptions = {}): Promise<ScrapeRun> {
+  void options;
   const startedAt = new Date().toISOString();
   const stats: ScrapeRun = {
     startedAt,
@@ -63,9 +54,9 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
   const fetcher = new FetchPage(session.page);
 
   try {
-    // 1) 口座一覧・残高
-    const portfolioHtml = await fetcher.fetch(SSNB_URLS.portfolio);
-    const accounts = parseAccounts(portfolioHtml);
+    // 1) 口座一覧・残高（/accounts の構造化テーブル）
+    const accountsHtml = await fetcher.fetch(SSNB_URLS.accounts);
+    const accounts = parseAccounts(accountsHtml);
     for (const acc of accounts) {
       upsertAccount(db, {
         id: acc.id,
@@ -82,31 +73,25 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
       stats.accountsUpserted++;
     }
 
-    // 2) 保有資産（口座別ページ）
+    // 2) 保有資産（口座別残高内訳: /accounts/show/{id}）
     for (const acc of accounts) {
-      const html = await fetcher.fetch(SSNB_URLS.holdings(acc.id));
+      const html = await fetcher.fetch(SSNB_URLS.accountShow(acc.id));
       const holdings = parseHoldings(html, acc.id);
       upsertHoldings(db, holdings);
       stats.holdingsUpserted += holdings.length;
     }
 
-    // 3) 資産推移
+    // 3) 資産推移（/bs/history）
     const historyHtml = await fetcher.fetch(SSNB_URLS.assetHistory);
     const points = parseAssetHistory(historyHtml);
     upsertAssetHistory(db, points);
     stats.assetHistoryUpserted = points.length;
 
-    // 4) 取引履歴（月次）
-    const months = options.history ? HISTORY_MONTHS : RECENT_TRANSACTION_MONTHS;
-    for (const { year, month } of monthRange(months)) {
-      const html = await fetcher.fetch(SSNB_URLS.transactions(year, month));
-      const txs = parseTransactions(html, accounts[0]?.id ?? "");
-      // 口座横断の取引一覧なので全口座共通の ID で保存できない場合は
-      // externalId の有無での重複排除に任せる
-      const withAccount = txs.map((t) => (t.accountId ? t : { ...t, accountId: accounts[0]?.id ?? "" }));
-      upsertTransactions(db, withAccount);
-      stats.transactionsUpserted += withAccount.length;
-    }
+    // 4) 取引明細（/cf、常に当月分。口座横断のため先頭口座に紐付けて保存）
+    const cfHtml = await fetcher.fetch(SSNB_URLS.transactions);
+    const txs = parseTransactions(cfHtml, accounts[0]?.id ?? "");
+    upsertTransactions(db, txs);
+    stats.transactionsUpserted = txs.length;
 
     // storageState を更新（セッション延命）
     if (session.didFullLogin) {

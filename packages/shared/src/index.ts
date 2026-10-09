@@ -3,16 +3,17 @@ export const SSNB_BASE_URL = "https://ssnb.x.moneyforward.com" as const;
 
 export const SSNB_URLS = {
   signIn: `${SSNB_BASE_URL}/users/sign_in`,
-  /** ログイン後のトップ（口座一覧・総資産） */
+  /** ログイン後のトップ（総資産） */
   portfolio: `${SSNB_BASE_URL}/`,
-  /** 取引履歴（月次） */
-  transactions: (year: number, month: number) =>
-    `${SSNB_BASE_URL}/transactions/${year}-${String(month).padStart(2, "0")}`,
-  /** 資産推移 */
-  assetHistory: `${SSNB_BASE_URL}/asset_histories`,
-  /** 保有資産（銘柄・預金等の内訳） */
-  holdings: (accountId: string) =>
-    `${SSNB_BASE_URL}/accounts/${accountId}/assets`,
+  /** 口座一覧（構造化テーブル。2026-10 実測） */
+  accounts: `${SSNB_BASE_URL}/accounts`,
+  /** 口座別残高内訳（2026-10 実測） */
+  accountShow: (accountId: string) =>
+    `${SSNB_BASE_URL}/accounts/show/${accountId}`,
+  /** 資産推移（旧 /asset_histories は 500 で廃止済み） */
+  assetHistory: `${SSNB_BASE_URL}/bs/history`,
+  /** 取引明細（常に当月分のみ。旧 /transactions/{ym} は 500 で廃止済み） */
+  transactions: `${SSNB_BASE_URL}/cf`,
 } as const;
 
 /** 口座種別（カテゴリ大分類） */
