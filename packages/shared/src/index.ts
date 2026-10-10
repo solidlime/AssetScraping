@@ -75,7 +75,12 @@ export interface Holding {
 export interface AssetHistoryPoint {
   /** YYYY-MM-DD */
   date: string;
-  category: AccountCategory;
+  /**
+   * カテゴリ名。/bs/history のヘッダラベルをそのまま保存する（例: 預金・現金、株式(現物)、投資信託）。
+   * AccountCategory では無い: web の資産構成は holdings の assetCategory（同じラベル語彙）で
+   * 前日比を name 照合するため、パーサ側で語彙を写像すると結合が崩れる。
+   */
+  category: string;
   value: number;
 }
 

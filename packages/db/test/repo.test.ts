@@ -499,3 +499,38 @@ describe("同名別ポジションの一意化と upsert/prune 連鎖（SBI証�
     expect(getHoldings(db, "acc-1")).toHaveLength(46);
   });
 });
+
+describe("upsertAssetHistory の語彙移行（asset_history.category = ラベル語彙）", () => {
+  it("旧語彙（bank/securities 等）の行は新語彙 upsert 時に削除され、二重計上しない", () => {
+    const db = freshDb();
+
+    // 旧語彙（AccountCategory）で保存された既存行（実データ相当: 1日3カテゴリ）
+    upsertAssetHistory(db, [
+      { date: "2026-10-09", category: "bank", value: 1000 },
+      { date: "2026-10-09", category: "securities", value: 2000 },
+      { date: "2026-10-09", category: "pension", value: 3000 },
+    ]);
+    const before = db.select().from(schema.assetHistory).all();
+    expect(before).toHaveLength(3);
+    expect(before.find((r) => r.date === "2026-10-09" && r.totalAssets !== null)?.totalAssets).toBe(6000);
+
+    // 新語彙（/bs/history のヘッダラベル）で再スクレイプ
+    upsertAssetHistory(db, [
+      { date: "2026-10-09", category: "預金・現金", value: 1000 },
+      { date: "2026-10-09", category: "株式(現物)", value: 2000 },
+      { date: "2026-10-09", category: "年金", value: 3000 },
+    ]);
+
+    const after = db.select().from(schema.assetHistory).all();
+    // 旧語彙行が残ると同日 6 行になり totalAssets が 12000 に膨らむ（二重計上）
+    expect(after).toHaveLength(3);
+    expect(after.every((r) => !["bank", "securities", "pension"].includes(r.category))).toBe(true);
+    expect(after.find((r) => r.category === "株式(現物)")?.value).toBe(2000);
+  });
+
+  it("旧語彙行のみ（新語彙 upsert 無し）でも既存行は壊さない", () => {
+    const db = freshDb();
+    upsertAssetHistory(db, [{ date: "2026-01-01", category: "bank", value: 500 }]);
+    expect(getAssetHistory(db)).toEqual([{ date: "2026-01-01", category: "bank", value: 500 }]);
+  });
+});

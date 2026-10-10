@@ -471,23 +471,24 @@ export function disambiguateHoldingNames(holdings: Array<Holding & { kindTag?: s
 // ---------------------------------------------------------------------------
 
 /**
- * /bs/history の列ヘッダ → AccountCategory 対応（実測 2026-10）。
- * AccountCategory に無い列（合計・詳細・日付）は null = skip。
- * 型上の制約で 株式(現物)/投資信託、債券/FX は同カテゴリに丸める（行内で加算して合算）。
+ * /bs/history の金額カテゴリ列（実測 2026-10）。この列のヘッダラベルをそのまま
+ * category として保存する。web の資産構成は holdings の assetCategory（同じく
+ * このラベル語彙）で前日比を name 照合するため、写像すると結合が崩れる。
+ * 合計・詳細・日付は金額カテゴリではないので skip する。
  */
-const HISTORY_COLUMN_CATEGORY: Array<[string, AccountCategory | null]> = [
-  ["預金・現金", "bank"],
-  ["株式(現物)", "securities"],
-  ["投資信託", "securities"],
-  ["債券", "other"],
-  ["暗号資産", "crypto"],
-  ["FX", "other"],
-  ["年金", "pension"],
-  ["ポイント", "point"],
-  ["合計", null],
-  ["詳細", null],
-  ["日付", null],
+const HISTORY_CATEGORY_COLUMNS: readonly string[] = [
+  "預金・現金",
+  "株式(現物)",
+  "投資信託",
+  "債券",
+  "暗号資産",
+  "FX",
+  "年金",
+  "ポイント",
 ];
+
+/** 金額カテゴリではない列（skip 対象） */
+const HISTORY_SKIP_COLUMNS = new Set(["合計", "詳細", "日付"]);
 
 /** 列ヘッダテキストを正規化（全角括弧 → 半角）して表引きキーにする */
 function headerKey(text: string): string {
@@ -518,15 +519,17 @@ export function parseAssetHistory(html: string): AssetHistoryPoint[] {
   }
   const columns = headerCells.map((th) => {
     const key = headerKey(cellText(th));
-    return HISTORY_COLUMN_CATEGORY.find(([name]) => name === key)?.[1] ?? null;
+    if (HISTORY_SKIP_COLUMNS.has(key)) return null;
+    // 未知の列は取り込まない（語彙が偶然一致した列の誤取り込みを防ぐ）
+    return HISTORY_CATEGORY_COLUMNS.includes(key) ? key : null;
   });
 
   const points: AssetHistoryPoint[] = [];
   for (const row of table.querySelectorAll("tr")) {
     const date = parseDate(cellText(row.querySelector("th")));
     if (!date) continue; // ヘッダ行・日付不明行は skip
-    // 同一カテゴリ列（株式/投信、債券/FX 等）は行内で加算して合算する
-    const byCategory = new Map<AccountCategory, number>();
+    // 列ごとに独立したカテゴリとして保存する（ラベル語彙＝holdings の assetCategory）
+    const byCategory = new Map<string, number>();
     const tds = row.querySelectorAll("td");
     for (let i = 0; i < columns.length; i++) {
       const category = columns[i];

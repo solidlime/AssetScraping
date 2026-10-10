@@ -500,17 +500,33 @@ describe("parseAssetHistory（/bs/history の資産推移テーブル）", () =>
   <table><tr><th>グラフ</th><td>...</td></tr></table>
   </body></html>`;
 
-  it("th=日付・td=金額・ヘッダ th からカテゴリを取る（合計・詳細列は skip）", () => {
+  it("th=日付・td=金額・ヘッダ th のラベルをそのまま category に保存する（合計・詳細列は skip）", () => {
     const points = parseAssetHistory(html);
     expect(points.filter((p) => p.date === "2026-10-09")).toEqual([
-      { date: "2026-10-09", category: "bank", value: 1234567 },
-      // 株式(現物) と 投資信託 は同カテゴリ(securities)のため加算
-      { date: "2026-10-09", category: "securities", value: 35000000 },
-      { date: "2026-10-09", category: "other", value: 0 }, // 債券 + FX（同カテゴリ合算）
-      { date: "2026-10-09", category: "crypto", value: 1500000 },
-      { date: "2026-10-09", category: "pension", value: 8000000 },
-      { date: "2026-10-09", category: "point", value: 869554 },
+      { date: "2026-10-09", category: "預金・現金", value: 1234567 },
+      // 列は独立して保存される（現行の securities への合算は誤り。
+      // web の資産構成は holdings 語彙「株式(現物)」「投資信託」で引くため）
+      { date: "2026-10-09", category: "株式(現物)", value: 10000000 },
+      { date: "2026-10-09", category: "投資信託", value: 25000000 },
+      { date: "2026-10-09", category: "債券", value: 0 },
+      { date: "2026-10-09", category: "暗号資産", value: 1500000 },
+      { date: "2026-10-09", category: "FX", value: 0 },
+      { date: "2026-10-09", category: "年金", value: 8000000 },
+      { date: "2026-10-09", category: "ポイント", value: 869554 },
     ]);
+  });
+
+  it("保存語彙が資産構成（holdings の assetCategory）のラベルとバイト一致する", () => {
+    // web の asset-breakdown-chart は changeMap を name（= assetCategory）で引く。
+    // 語彙がずれると前日比が「—」になるため、ここで一致を固定する。
+    const labels = parseAssetHistory(html)
+      .filter((p) => p.date === "2026-10-09")
+      .map((p) => p.category);
+    for (const expected of ["株式(現物)", "投資信託"]) {
+      expect(labels).toContain(expected);
+    }
+    // 全角括弧の正規化漏れが無いこと（'株式（現物）' は不一致になる）
+    expect(labels.some((l) => /[（）]/.test(l))).toBe(false);
   });
 
   it("日付列が解釈できない行は skip する", () => {

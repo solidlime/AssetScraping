@@ -457,9 +457,30 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
   });
 }
 
+// asset_history の旧語彙（AccountCategory）行を掃除する。
+// 現行の category は /bs/history のヘッダラベル語彙（例: 株式(現物)・預金・現金）であり、
+// 旧語彙行が同一日に残ると totalAssets の加算と getAssetHistoryByDay の
+// categories に二重計上される（例: bank 行 + 預金・現金 行）。
+// 次回スクレイプで新語彙に置き換わるまでの移行措置。冪等。
+const LEGACY_ASSET_HISTORY_CATEGORIES = [
+  "bank",
+  "securities",
+  "cash",
+  "point",
+  "crypto",
+  "pension",
+  "real_estate",
+  "other",
+];
+
 export function upsertAssetHistory(db: Database, rows: AssetHistoryPoint[]): void {
   if (rows.length === 0) return;
   db.transaction((tx) => {
+    // 旧語彙行を先に消す（新語彙と同一日で共存すると二重計上になるため）
+    tx.delete(assetHistory)
+      .where(inArray(assetHistory.category, LEGACY_ASSET_HISTORY_CATEGORIES))
+      .run();
+
     for (const p of rows) {
       tx.insert(assetHistory)
         .values(p)
@@ -598,7 +619,7 @@ export function getAssetHistory(
     .from(assetHistory)
     .orderBy(assetHistory.date);
   const rows = (opts.since ? base.where(gte(assetHistory.date, opts.since)) : base).all();
-  return rows.map((r) => ({ ...r, category: r.category as AccountCategory }));
+  return rows.map((r) => ({ ...r, category: r.category }));
 }
 
 /** 月次収支サマリー (YYYY-MM 単位、収入-支出) */
