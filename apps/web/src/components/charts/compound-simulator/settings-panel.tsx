@@ -222,7 +222,18 @@ export function SettingsPanel({
                 </div>
               }
             />
-            <span className="text-sm font-semibold text-primary">{annualReturnRate}%</span>
+            <div className="w-32 shrink-0">
+              <NumberField
+                value={annualReturnRate}
+                onValueChange={(v) => onAnnualReturnRateChange(v ?? 0)}
+                min={0}
+                max={15}
+                step={0.1}
+                largeStep={0.5}
+                suffix="%"
+                aria-label="想定利回り（数値入力）"
+              />
+            </div>
           </div>
           <Slider
             value={annualReturnRate}
