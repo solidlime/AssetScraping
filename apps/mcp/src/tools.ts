@@ -20,14 +20,16 @@ export function closeDb(db: unknown): void {
   client?.close();
 }
 
-export function dbTool<T>(query: (db: Database) => T): {
+export async function dbTool<T>(query: (db: Database) => T | Promise<T>): Promise<{
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
-} {
+}> {
   let db: Database | null = null;
   try {
     db = openReadOnlyDb();
-    const result = query(db);
+    // async クエリ（getFinancialMetrics 等）も受け取れるよう await する。
+    // 同期クエリでは await が素通しになるだけで挙動は変わらない。
+    const result = await query(db);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   } catch (err) {
     return {
