@@ -43,8 +43,11 @@ data/*.db
 .pi/
 
 # Local scratch artifacts
-.mcp_parse.py
+.mcp_*
 .openapi.json
+.refs/
+.probe*
+nul
 
 # Screenshots (local, never commit actual data views)
 apps/web/screenshots/
