@@ -200,10 +200,10 @@ describe("parseHoldings（/accounts/show/{id} の「種類・名称」テーブ�
     ]);
   });
 
-  it("同一ヘッダのテーブルが複数あっても、先行テーブルと同一金額の後発行は重複計上しない", () => {
+  it("集約テーブル（種類・名称）と内訳テーブル（名称）が併存しても、後発の「名称」行を二重計上しない", () => {
     const html = `
     <table><tr><th>種類・名称</th><th>残高</th></tr><tr><td>SBIハイパー預金</td><td>37,818円</td></tr></table>
-    <table><tr><th>種類・名称</th><th>残高</th></tr><tr><td>さくら支店(300)</td><td>37,818円</td></tr></table>`;
+    <table><tr><th>名称</th><th>残高</th></tr><tr><td>さくら支店(300)</td><td>37,818円</td></tr></table>`;
     expect(parseHoldings(html, "acc-1").map((h) => h.name)).toEqual(["SBIハイパー預金"]);
   });
 
@@ -335,6 +335,75 @@ describe("parseHoldings の assetCategory 推定（本家資産カテゴリ語�
   it("opts 未指定でもパースは壊れない（デフォルト other）", () => {
     const html = `<table><thead><tr><th>名称</th><th>残高</th></tr></thead><tbody><tr><td>円残高</td><td>101円</td></tr></tbody></table>`;
     expect(parseHoldings(html, "x-1")[0].assetCategory).toBe("その他");
+  });
+});
+
+describe("parseHoldings（実測 SBI証券/新生/NRK のテーブル構造）", () => {
+  it("口座概要テーブル（名称|種類|番号|残高）は除外し、株式33行+投信12行+現金を合算する（実測 SBI証券）", () => {
+    const stockRows = Array.from({ length: 33 }, (_, i) => {
+      const v = (i + 1) * 1000;
+      return `<tr><td>${1000 + i}</td><td>銘柄${i + 1}</td><td>100</td><td>1,717</td><td>2,000</td><td>${v.toLocaleString()}円</td><td>0円</td><td>100円</td><td>5.0%</td><td></td></tr>`;
+    }).join("");
+    const fundRows = Array.from({ length: 12 }, (_, i) => {
+      const v = (i + 1) * 2000;
+      return `<tr><td>ファンド${i + 1}</td><td>50,000</td><td>27,021</td><td>38,635</td><td>${v.toLocaleString()}円</td><td>0円</td><td>100円</td><td>5.0%</td><td></td></tr>`;
+    }).join("");
+    const html = `
+    <table><thead><tr><th>名称</th><th>種類</th><th>番号</th><th>残高</th></tr></thead><tbody>
+      <tr><td>さくら支店(300)</td><td>証券口座</td><td>4691735</td><td>10,381,046円</td></tr>
+    </tbody></table>
+    <table><thead><tr><th>種類・名称</th><th>残高</th></tr></thead><tbody>
+      <tr><td>米ドル 現金</td><td>35,713円</td></tr>
+      <tr><td>香港ドル 現金</td><td>16円</td></tr>
+      <tr><td>現金残高(ハイブリッド預金除く)</td><td>26円</td></tr>
+      <tr><td>現金（AI投資）</td><td>2,446円</td></tr>
+    </tbody></table>
+    <table><thead><tr><th>銘柄コード</th><th>銘柄名</th><th>保有数</th><th>平均取得単価</th><th>現在値</th><th>評価額</th><th>前日比</th><th>評価損益</th><th>評価損益率</th><th>取得日</th></tr></thead><tbody>${stockRows}</tbody></table>
+    <table><thead><tr><th>銘柄名</th><th>保有数</th><th>平均取得単価</th><th>基準価額</th><th>評価額</th><th>前日比</th><th>評価損益</th><th>評価損益率</th><th>取得日</th></tr></thead><tbody>${fundRows}</tbody></table>`;
+    const holdings = parseHoldings(html, "sbi-1", { category: "securities", accountName: "SBI証券" });
+    // 口座概要の 10,381,046 が混入しないこと
+    expect(holdings.some((h) => h.value === 10381046)).toBe(false);
+    expect(holdings).toHaveLength(4 + 33 + 12);
+    const stock = holdings.find((h) => h.name === "銘柄1")!;
+    // 平均取得単価は円表記なしのセルを loose parse する
+    expect(stock).toMatchObject({ quantity: 100, averagePrice: 1717, value: 1000 });
+    const cash = 35713 + 16 + 26 + 2446;
+    const stocks = Array.from({ length: 33 }, (_, i) => (i + 1) * 1000).reduce((a, b) => a + b, 0);
+    const funds = Array.from({ length: 12 }, (_, i) => (i + 1) * 2000).reduce((a, b) => a + b, 0);
+    const sum = holdings.reduce((s, h) => s + h.value, 0);
+    expect(sum).toBe(cash + stocks + funds);
+  });
+
+  it("口座概要テーブルの支店名で商品名を取り違えない（実測 SBI新生: 132,861 が復活）", () => {
+    const html = `
+    <table><thead><tr><th>名称</th><th>種類</th><th>番号</th><th>残高</th></tr></thead><tbody>
+      <tr><td>さくら支店(300)</td><td>円普通預金</td><td>4691735</td><td>132,861円</td></tr>
+      <tr><td>さくら支店(300)</td><td>SBIハイパー預金</td><td>4691735</td><td>37,818円</td></tr>
+    </tbody></table>
+    <table><thead><tr><th>種類・名称</th><th>残高</th></tr></thead><tbody>
+      <tr><td>円普通預金</td><td>132,861円</td></tr>
+      <tr><td>SBIハイパー預金</td><td>37,818円</td></tr>
+    </tbody></table>`;
+    const holdings = parseHoldings(html, "shinsei-1", { category: "bank", accountName: "SBI新生銀行" });
+    expect(holdings.map((h) => h.name)).toEqual(["円普通預金", "SBIハイパー預金"]);
+    expect(holdings.reduce((s, h) => s + h.value, 0)).toBe(170679);
+  });
+
+  it("同テーブル内で他行合計と一致する集約行を除外する（実測 NRK: 石川サンケン株式会社 1,004,921）", () => {
+    const html = `
+    <table><thead><tr><th>名称</th><th>取得価額</th><th>現在価値</th><th>評価損益</th><th>評価損益率</th><th>取得日</th></tr></thead><tbody>
+      <tr><td>三菱UFJ DC海外株式インデックスファンド</td><td>150,812円</td><td>328,143円</td><td>177,331円</td><td>117.58%</td><td></td></tr>
+      <tr><td>ラッセル・DC外株ファンド</td><td>160,000円</td><td>321,022円</td><td>161,022円</td><td>100.64%</td><td></td></tr>
+      <tr><td>三菱UFJ 純金ファンド(愛称:ファインゴールド)</td><td>180,000円</td><td>355,756円</td><td>175,756円</td><td>97.64%</td><td></td></tr>
+      <tr><td>石川サンケン株式会社</td><td>490,812円</td><td>1,004,921円</td><td>514,109円</td><td>104.75%</td><td></td></tr>
+    </tbody></table>`;
+    const holdings = parseHoldings(html, "nrk-1", { category: "pension", accountName: "NRK(確定拠出年金)" });
+    expect(holdings.map((h) => h.name)).toEqual([
+      "三菱UFJ DC海外株式インデックスファンド",
+      "ラッセル・DC外株ファンド",
+      "三菱UFJ 純金ファンド(愛称:ファインゴールド)",
+    ]);
+    expect(holdings.reduce((s, h) => s + h.value, 0)).toBe(1004921);
   });
 });
 

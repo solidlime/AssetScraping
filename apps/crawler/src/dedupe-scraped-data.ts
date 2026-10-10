@@ -10,11 +10,11 @@
  *   再スクレイプ毎に同一取引が追記されていた（72+ 行 / 実ユニーク 9 件）。
  *
  * 方針:
- * - transactions: (口座, 日付, 摘要, 符号付き金額) でグループ化し、**最新バッチ
- *   (created_at) の行だけを残す**。最新バッチ内に同一内容が複数あれば、それを
- *   正当な複数回取引として全て保持する（"同日同額同摘要でも正当に複数" を消さない）。
- *   残した行には parser と同じ決定的 externalId/mfId を付与し、次回スクレイプの
- *   upsert が同一行に収束するようにする。冪等。
+ * - transactions: 判定は packages/db の dedupeLegacyTransactions に集約。
+ *   (口座, 日付, 摘要, 符号付き金額) が同一で決定的 externalId 行が存在する旧 NULL 行は
+ *   再取得可能な重複として削除。決定的行が無い旧 NULL 行は消さず決定的 externalId を
+ *   付与し、次回 upsert が同一行に収束するようにする（"同日同額同摘要でも正当に複数" は
+ *   決定的行として残るため消えない）。冪等。
  * - holdings: 同一口座・同一金額の 2 行組のうち、支店/カード内訳行（名前が
  *   集約行の部分文字列、または「支店」を含み他方が含まない、または口座名に
  *   現れない方）を削除候補とする。判定不能な組は削除せず警告のみ。冪等。
@@ -25,9 +25,8 @@
  *
  * 注意: 削除前に <db>.bak へバックアップを取る。
  */
-import { eq, inArray } from "drizzle-orm";
-import { createDb, resolveDbPath, schema } from "@asset-scraping/db";
-import { buildTransactionExternalId } from "@asset-scraping/shared";
+import { inArray } from "drizzle-orm";
+import { createDb, dedupeLegacyTransactions, resolveDbPath, schema } from "@asset-scraping/db";
 
 const dryRun = process.argv.includes("--dry-run");
 const dbPath = resolveDbPath();
@@ -110,72 +109,14 @@ for (const rows of holdingGroups.values()) {
 
 // ---------------------------------------------------------------------------
 // F3: transactions の重複蓄積
+//
+// 判定（同一内容の決定的 externalId 行との突合）は packages/db の
+// dedupeLegacyTransactions に集約した（テスト可能にするため）。
+// ここでは dry-run で件数を表示し、実際の削除/付与は下の本処理で行う。
 // ---------------------------------------------------------------------------
 
-interface TxRow {
-  id: number;
-  accountId: string;
-  date: string;
-  description: string;
-  amount: number;
-  type: string | null;
-  createdAt: string | null;
-  externalId: string | null;
-}
-
-const transactions = db
-  .select({
-    id: schema.transactions.id,
-    accountId: schema.transactions.accountId,
-    date: schema.transactions.date,
-    description: schema.transactions.description,
-    amount: schema.transactions.amount,
-    type: schema.transactions.type,
-    createdAt: schema.transactions.createdAt,
-    externalId: schema.transactions.externalId,
-  })
-  .from(schema.transactions)
-  .all();
-
-function signedAmount(t: TxRow): number {
-  // 旧データは type=null + 負値、新データは type=expense + 正值で保存されている。
-  return t.type === "expense" ? -Math.abs(t.amount) : t.amount;
-}
-
-const txGroups = new Map<string, TxRow[]>();
-for (const t of transactions) {
-  const key = `${t.accountId}\u0000${t.date}\u0000${t.description}\u0000${signedAmount(t)}`;
-  const list = txGroups.get(key);
-  if (list) list.push(t);
-  else txGroups.set(key, [t]);
-}
-
-const txRemoveIds: number[] = [];
-/** 最新バッチに残した行へ付与する externalId/mfId（未付与 or 不一致の行のみ）。 */
-const txReassign: Array<{ id: number; externalId: string }> = [];
-for (const rows of txGroups.values()) {
-  const sorted = [...rows].sort((a, b) => a.id - b.id);
-  const latestCreatedAt = sorted.reduce(
-    (max, r) => ((r.createdAt ?? "") > max ? (r.createdAt ?? "") : max),
-    "",
-  );
-  const keep = sorted.filter((r) => (r.createdAt ?? "") === latestCreatedAt);
-  for (const r of sorted) {
-    if ((r.createdAt ?? "") !== latestCreatedAt) txRemoveIds.push(r.id);
-  }
-  const first = keep[0]!;
-  const signed = signedAmount(first);
-  keep.forEach((row, occurrence) => {
-    const externalId = buildTransactionExternalId(
-      row.accountId,
-      row.date,
-      row.description,
-      signed,
-      occurrence,
-    );
-    if (row.externalId !== externalId) txReassign.push({ id: row.id, externalId });
-  });
-}
+const txTotal = db.select({ id: schema.transactions.id }).from(schema.transactions).all().length;
+const txResult = dedupeLegacyTransactions(db, { dryRun: true });
 
 // ---------------------------------------------------------------------------
 // 結果表示
@@ -194,7 +135,7 @@ for (const rows of holdingsAmbiguous) {
 }
 
 console.log(
-  `\n[F3 transactions] 全 ${transactions.length} 行 → 削除 ${txRemoveIds.length} 件 / 残 ${transactions.length - txRemoveIds.length} 件 / externalId 付与 ${txReassign.length} 件`,
+  `\n[F3 transactions] 全 ${txTotal} 行 → 削除 ${txResult.deleted} 件 / 残 ${txTotal - txResult.deleted} 件 / externalId 付与 ${txResult.reassigned} 件`,
 );
 
 if (dryRun) {
@@ -202,7 +143,7 @@ if (dryRun) {
   process.exit(0);
 }
 
-if (holdingsToDelete.length === 0 && txRemoveIds.length === 0) {
+if (holdingsToDelete.length === 0 && txResult.deleted + txResult.reassigned === 0) {
   console.log("\ndedupe: 削除対象なし。バックアップも不要。");
   process.exit(0);
 }
@@ -219,19 +160,10 @@ db.transaction((tx) => {
       .where(inArray(schema.holdings.id, holdingsToDelete.map((h) => h.id)))
       .run();
   }
-
-  if (txRemoveIds.length > 0) {
-    tx.delete(schema.transactions).where(inArray(schema.transactions.id, txRemoveIds)).run();
-  }
-
-  for (const { id, externalId } of txReassign) {
-    tx.update(schema.transactions)
-      .set({ externalId, mfId: externalId, updatedAt: new Date().toISOString() })
-      .where(eq(schema.transactions.id, id))
-      .run();
-  }
 });
 
+const txDone = dedupeLegacyTransactions(db);
+
 console.log(
-  `dedupe: done. holdings -${holdingsToDelete.length} / transactions -${txRemoveIds.length} / externalId 付与 ${txReassign.length}`,
+  `dedupe: done. holdings -${holdingsToDelete.length} / transactions -${txDone.deleted} / externalId 付与 ${txDone.reassigned}`,
 );

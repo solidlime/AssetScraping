@@ -173,16 +173,23 @@ const NONE: HoldingsColumns = {
 
 /**
  * ヘッダ th から列位置を決める。本家 portfolio.ts の resolveDepositColumns と同様、
- * ラベル表記ゆれ（種類・名称/名称、残高/評価額）は列名表引きで吸収する。
+ * ラベル表記ゆれは列名表引きで吸収する。
  * - depo 形: 種類・名称 | 残高
  * - 名称形: 名称 | 残高
  * - pns 形: 種類・名称 | 平均取得価格 | 評価額 | 取得価額 | 評価損益 | 評価損益率
  * - eq 形: コード | 銘柄 | 数量 | 平均取得価格 | 単価 | 残高 | …（name ラベルは「銘柄」）
+ * - 株式形: 銘柄コード | 銘柄名 | 保有数 | 平均取得単価 | 現在値 | 評価額 | …（実測 SBI証券）
+ * - 投信形: 銘柄名 | 保有数 | 平均取得単価 | 基準価額 | 評価額 | …（実測 SBI証券）
  */
 export function resolveHoldingsColumns(headers: string[]): HoldingsColumns {
+  // 口座概要テーブル（名称|種類|番号|残高 等）は保有資産ではない。番号列の有無で除外する。
+  // 実測 SBI新生銀行: 口座概要の名称列は「さくら支店(300)」で、商品名は「種類」側にあり、
+  // これを holdings として拾うと (account_id,name) 衝突で残高を取り違える（132,861 が消える）。
+  if (headers.includes("番号")) return NONE;
   const indexOf = (labels: string[]): number =>
     headers.findIndex((h) => labels.includes(h));
-  const name = indexOf(["種類・名称", "名称", "銘柄"]);
+  // 名称系: 種類・名称（銀行/現金）、銘柄名（株式・投信, 実測 SBI証券）、名称（年金/保険）、銘柄（旧 eq 形）
+  const name = indexOf(["種類・名称", "銘柄名", "名称", "銘柄"]);
   if (name < 0) return NONE;
   // 金額列: 残高があれば優先、無ければ 評価額 / 現在価値（pns 形実測 2026-10）
   const valueLabels = ["残高", "評価額", "現在価値"];
@@ -192,17 +199,35 @@ export function resolveHoldingsColumns(headers: string[]): HoldingsColumns {
     if (i >= 0 && (value < 0 || i < value)) value = i;
   }
   if (value < 0) return NONE;
-  const quantity = headers.findIndex((h) => h === "数量");
-  const avgCost = indexOf(["平均取得価格", "取得価額"]);
-  // 評価損益: pns/eq 形で「含み損益」または「評価損益」の列
+  // 保有数（実測 SBI証券 株式・投信）/ 数量（旧 eq 形）
+  const quantity = indexOf(["保有数", "数量"]);
+  // 平均取得単価（実測 SBI証券。円表記なし）/ 平均取得価格 / 取得価額（pns 形）
+  const avgCost = indexOf(["平均取得単価", "平均取得価格", "取得価額"]);
+  // 評価損益: pns/eq 形・株式形で「含み損益」または「評価損益」の列
   const gain = indexOf(["含み損益", "評価損益"]);
   return {
     nameIdx: name,
     valueIdx: value,
-    quantityIdx: quantity,
-    averagePriceIdx: avgCost,
+    quantityIdx: quantity >= 0 ? quantity : null,
+    averagePriceIdx: avgCost >= 0 ? avgCost : null,
     unrealizedGainIdx: gain >= 0 ? gain : null,
   };
+}
+
+/**
+ * 同一テーブル内で「他の行すべての合計」に一致する行の index を返す（無ければ -1）。
+ * 実測 NRK(確定拠出年金): 「石川サンケン株式会社 1,004,921」は合計セルを持たない
+ * 集約行で、明細 3 行（328,143 + 321,022 + 355,756）と同額。名前 regex に頼らず
+ * 構造で除外する。明細が 2 行以上ある場合のみ適用する（1 行の自己一致は除外しない）。
+ */
+function findAggregateRowIndex(rows: Array<{ value: number }>): number {
+  for (let i = 0; i < rows.length; i++) {
+    const others = rows.filter((_, j) => j !== i);
+    if (others.length < 2) continue;
+    const sum = others.reduce((s, r) => s + r.value, 0);
+    if (rows[i]!.value !== 0 && rows[i]!.value === sum) return i;
+  }
+  return -1;
 }
 
 /** 数量セル（"100株" / "52.3491口" / "0.0321"）→ number。解釈不可は null */
@@ -282,7 +307,18 @@ export function parseHoldings(
     const cols = resolveHoldingsColumns(headers);
     if (cols === NONE) continue;
 
-    const tableValues: number[] = [];
+    // 支店/カード内訳の「名称」形テーブルは、先行の集約テーブル（種類・名称）と同一金額が
+    // 別名で二重計上されるため金額重複で skip する。株式・投信の「銘柄名」形は別資産で、
+    // 実測 SBI証券 のように株式と投信で評価額が一致し得るため値ベースの排除をしない。
+    const isDetailTable = headers[cols.nameIdx] === "名称";
+    // 1 テーブル分をいったん収集し、集約行を除外してから採用する
+    const candidates: Array<{
+      name: string;
+      quantity: number;
+      value: number;
+      averagePrice: number | null;
+      unrealizedGain: number | null;
+    }> = [];
     for (const row of table.querySelectorAll("tr")) {
       const tds = row.querySelectorAll("td");
       if (tds.length < 2) continue;
@@ -290,25 +326,37 @@ export function parseHoldings(
       if (!name || /^(合計|小計|total)/i.test(name)) continue;
       const value = parseYen(cellText(tds[cols.valueIdx]));
       if (value === null) continue;
-      // 0 円は重複判定に使わない（価値のない空行を消さない）
-      if (value !== 0 && seenValuesFromEarlierTables.has(value)) continue;
       const quantity =
         cols.quantityIdx !== null ? (parseQuantity(cellText(tds[cols.quantityIdx])) ?? 0) : 0;
+      // 実測 SBI証券: 平均取得単価セルは「1,717」のように円表記が無い → loose で拾う
       const averagePrice =
-        cols.averagePriceIdx !== null ? parseYen(cellText(tds[cols.averagePriceIdx])) : null;
+        cols.averagePriceIdx !== null
+          ? parseYenLoose(cellText(tds[cols.averagePriceIdx]))
+          : null;
       const unrealizedGain =
         cols.unrealizedGainIdx !== null ? parseYen(cellText(tds[cols.unrealizedGainIdx])) : null;
+      candidates.push({ name, quantity, value, averagePrice, unrealizedGain });
+    }
+
+    // 構造ベースの集約行除外（他行合計と一致する行）。名前 regex では拾えないため。
+    const aggregateIdx = findAggregateRowIndex(candidates);
+    if (aggregateIdx >= 0) candidates.splice(aggregateIdx, 1);
+
+    const tableValues: number[] = [];
+    for (const c of candidates) {
+      // 0 円は重複判定に使わない（価値のない空行を消さない）
+      if (isDetailTable && c.value !== 0 && seenValuesFromEarlierTables.has(c.value)) continue;
       holdings.push({
         accountId,
-        name,
-        assetCategory: estimateAssetCategory(name, opts?.category, opts?.accountName),
-        quantity,
-        value,
-        averagePrice,
-        unrealizedGain,
+        name: c.name,
+        assetCategory: estimateAssetCategory(c.name, opts?.category, opts?.accountName),
+        quantity: c.quantity,
+        value: c.value,
+        averagePrice: c.averagePrice,
+        unrealizedGain: c.unrealizedGain,
         scrapedAt,
       });
-      if (value !== 0) tableValues.push(value);
+      if (c.value !== 0) tableValues.push(c.value);
     }
     for (const value of tableValues) seenValuesFromEarlierTables.add(value);
   }

@@ -20,6 +20,7 @@ import {
   upsertHoldings,
   upsertHoldingValues,
   upsertTransactions,
+  pruneHoldingsByName,
   type Database,
 } from "@asset-scraping/db";
 import {
@@ -94,6 +95,12 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
         accountName: acc.name,
       });
       upsertHoldings(db, holdings);
+      // パーサの名前規約変更で残った旧世代行（実測 7 口座の別名二重計上）を同一口座内で掃除する。
+      pruneHoldingsByName(
+        db,
+        acc.id,
+        holdings.map((h) => h.name),
+      );
       holdingsRows.push(...holdings);
       stats.holdingsUpserted += holdings.length;
     }
