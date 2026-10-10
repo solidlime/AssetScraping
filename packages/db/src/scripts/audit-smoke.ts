@@ -18,7 +18,6 @@ import {
   getAssetBreakdownByCategory,
   getHoldingsWithLatestValues,
   hasInvestmentHoldings,
-  resolveDbPath,
 } from "../index.ts";
 
 // プロジェクトルートの .data を cwd 依存なしに指す（DB_PATH 指定時はそちらを優先）
