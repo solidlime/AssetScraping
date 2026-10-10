@@ -7,7 +7,7 @@ import type {
   Transaction,
 } from "@asset-scraping/shared";
 import { buildTransactionExternalId } from "@asset-scraping/shared";
-import { and, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, sql } from "drizzle-orm";
 import { categorizeDbTransaction } from "./shared/categorize.ts";
 import type { Database } from "./client.ts";
 import { getOrCreateCategory } from "./repositories/categories.ts";
@@ -262,6 +262,102 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
         .run();
     }
   });
+}
+
+/**
+ * 口座スコープの holdings から、今回の取得集合に無い name の行を削除する（stale cleanup）。
+ * (account_id, name) の unique index により、パーサの名前規約が変わった旧世代の別名行は
+ * upsert では消えない（実測: イオン/SBI新生等 7 口座の二重計上）。同一口座に限定して
+ * 差集合を削除する。他の口座・他ソースは name 集合が違うため影響しない。
+ *
+ * 空集合では何もしない（パースが 0 件を返したときに口座の保有資産を全消しする事故を防ぐ）。
+ * ponytail: 「今回 0 件」で旧行を消したい口座は prune されない。必要なら明示フラグで。
+ * 返り値は削除件数。
+ */
+export function pruneHoldingsByName(db: Database, accountId: string, keepNames: string[]): number {
+  if (keepNames.length === 0) return 0;
+  const result = db
+    .delete(holdings)
+    .where(and(eq(holdings.accountId, accountId), notInArray(holdings.name, keepNames)))
+    .run();
+  return result.changes;
+}
+
+/**
+ * 旧世代の transactions（externalId IS NULL）を、同一内容の決定的 externalId 行と突合して整理する。
+ *
+ * 背景: commit 5030676 で parser は決定的 externalId を付与するようになったが、既存の
+ * NULL 行は unique index (account_id, external_id) に衝突せず残り続け、月次サマリーが
+ * 実支出の約 10 倍になっていた（実測 NAS: externalId あり 1 件 + null 11 件 等）。
+ *
+ * 判定根拠は (account_id, date, description, 符号付き金額) が完全一致すること。
+ * - 決定的行がある内容の旧 NULL 行 → 新方式で再取得できる重複なので削除。
+ *   同日同額同摘要の正当な複数回取引は occurrence 0..n-1 の決定的行として複数残るため消えない。
+ * - 決定的行が無い内容の旧 NULL 行 → 新方式で拾えない取引の可能性があるので消さず、
+ *   次回スクレイプの upsert が同一行に収束するよう決定的 externalId を付与する。
+ */
+export function dedupeLegacyTransactions(
+  db: Database,
+  opts: { dryRun?: boolean } = {},
+): { deleted: number; reassigned: number } {
+  const rows = db
+    .select({
+      id: transactions.id,
+      accountId: transactions.accountId,
+      date: transactions.date,
+      description: transactions.description,
+      amount: transactions.amount,
+      type: transactions.type,
+      externalId: transactions.externalId,
+    })
+    .from(transactions)
+    .all();
+
+  // 保存規約の吸収: 旧データは type=null + 符号付き金額、新データは type=expense/income + 正値。
+  const signed = (r: { amount: number; type: string | null }): number =>
+    r.type === "expense" ? -Math.abs(r.amount) : r.type === "income" ? Math.abs(r.amount) : r.amount;
+
+  const groups = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const key = `${r.accountId}\u0000${r.date}\u0000${r.description}\u0000${signed(r)}`;
+    const list = groups.get(key);
+    if (list) list.push(r);
+    else groups.set(key, [r]);
+  }
+
+  const deleteIds: number[] = [];
+  const reassign: Array<{ id: number; externalId: string }> = [];
+  for (const group of groups.values()) {
+    const legacy = group.filter((r) => r.externalId === null).sort((a, b) => a.id - b.id);
+    if (legacy.length === 0) continue;
+    const deterministic = group.some((r) => r.externalId !== null);
+    if (deterministic) {
+      for (const r of legacy) deleteIds.push(r.id);
+      continue;
+    }
+    const amount = signed(legacy[0]!);
+    legacy.forEach((r, occurrence) => {
+      reassign.push({
+        id: r.id,
+        externalId: buildTransactionExternalId(r.accountId, r.date, r.description, amount, occurrence),
+      });
+    });
+  }
+
+  if (opts.dryRun) return { deleted: deleteIds.length, reassigned: reassign.length };
+
+  db.transaction((tx) => {
+    if (deleteIds.length > 0) {
+      tx.delete(transactions).where(inArray(transactions.id, deleteIds)).run();
+    }
+    for (const { id, externalId } of reassign) {
+      tx.update(transactions)
+        .set({ externalId, mfId: externalId, updatedAt: nowIso() })
+        .where(eq(transactions.id, id))
+        .run();
+    }
+  });
+  return { deleted: deleteIds.length, reassigned: reassign.length };
 }
 
 export function upsertTransactions(db: Database, rows: Transaction[]): void {

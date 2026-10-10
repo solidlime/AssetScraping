@@ -12,6 +12,8 @@ import {
   getMonthlySummary,
   getLastScrapedAt,
   getTransactions,
+  pruneHoldingsByName,
+  dedupeLegacyTransactions,
   upsertAccount,
   upsertAccountStatus,
   upsertAssetHistory,
@@ -258,5 +260,120 @@ describe("upsertTransactions の重複排除", () => {
     const all = db.select().from(schema.transactions).all();
     expect(all).toHaveLength(2);
     expect(new Set(all.map((t) => t.externalId)).size).toBe(2);
+  });
+});
+
+describe("pruneHoldingsByName（スクレイプ時の stale cleanup）", () => {
+  const mk = (accountId: string, name: string, value: number) => ({
+    accountId,
+    name,
+    quantity: 0,
+    value,
+    averagePrice: null,
+    unrealizedGain: null,
+    scrapedAt: "2026-02-14T06:30:00.000Z",
+  });
+
+  it("同一口座で今回の name 集合に無い旧世代行だけを削除し、他口座は残す", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "イオン銀行", institution: "イオン銀行", category: "bank" });
+    upsertAccount(db, { id: "acc-2", name: "他行", institution: "他行", category: "bank" });
+    upsertHoldings(db, [
+      mk("acc-1", "アメシスト支店 普通預金", 35),
+      mk("acc-1", "アメシスト支店", 35),
+      mk("acc-2", "円預金", 100),
+    ]);
+
+    const removed = pruneHoldingsByName(db, "acc-1", ["アメシスト支店 普通預金"]);
+    expect(removed).toBe(1);
+    expect(getHoldings(db, "acc-1").map((h) => h.name)).toEqual(["アメシスト支店 普通預金"]);
+    expect(getHoldings(db, "acc-2")).toHaveLength(1);
+  });
+
+  it("空集合では何も削除しない（パース 0 件で全消しする事故を防ぐ）", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "銀行", institution: "銀行", category: "bank" });
+    upsertHoldings(db, [mk("acc-1", "普通預金", 100)]);
+    expect(pruneHoldingsByName(db, "acc-1", [])).toBe(0);
+    expect(getHoldings(db, "acc-1")).toHaveLength(1);
+  });
+});
+
+describe("dedupeLegacyTransactions（F3: 旧 externalId=null 行の突合）", () => {
+  function insertLegacy(
+    db: DB,
+    t: { accountId: string; date: string; description: string; amount: number; type?: string | null },
+  ): void {
+    db.insert(schema.transactions)
+      .values({
+        externalId: null,
+        mfId: null,
+        accountId: t.accountId,
+        date: t.date,
+        description: t.description,
+        amount: t.amount,
+        category: null,
+        type: t.type ?? null,
+        isTransfer: false,
+        isExcludedFromCalculation: false,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      })
+      .run();
+  }
+
+  it("決定的 externalId 行が同一内容にある旧 null 行は削除し、決定的行は残す", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "イオン銀行", institution: "イオン銀行", category: "bank" });
+    // 新世代の決定的行 1 件（parse → upsert）
+    upsertTransactions(db, [
+      { externalId: null, accountId: "acc-1", date: "2026-10-04", description: "VISA", amount: -90, category: null },
+    ]);
+    // 旧世代の null 11 件
+    for (let i = 0; i < 11; i++) {
+      insertLegacy(db, { accountId: "acc-1", date: "2026-10-04", description: "VISA", amount: -90 });
+    }
+    expect(db.select().from(schema.transactions).all()).toHaveLength(12);
+
+    expect(dedupeLegacyTransactions(db)).toEqual({ deleted: 11, reassigned: 0 });
+    const all = db.select().from(schema.transactions).all();
+    expect(all).toHaveLength(1);
+    expect(all[0]!.externalId).not.toBeNull();
+    expect(getMonthlySummary(db)[0]).toMatchObject({ income: 0, expense: 90, net: -90 });
+  });
+
+  it("同日同額同摘要の正当な複数回取引（occurrence 0/1）は消さない", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "イオン銀行", institution: "イオン銀行", category: "bank" });
+    upsertTransactions(db, [
+      { externalId: null, accountId: "acc-1", date: "2026-10-01", description: "コーヒー", amount: -450, category: null },
+      { externalId: null, accountId: "acc-1", date: "2026-10-01", description: "コーヒー", amount: -450, category: null },
+    ]);
+    for (let i = 0; i < 3; i++) {
+      insertLegacy(db, { accountId: "acc-1", date: "2026-10-01", description: "コーヒー", amount: -450 });
+    }
+
+    expect(dedupeLegacyTransactions(db)).toEqual({ deleted: 3, reassigned: 0 });
+    const all = db.select().from(schema.transactions).all();
+    expect(all).toHaveLength(2);
+    expect(new Set(all.map((t) => t.externalId)).size).toBe(2);
+  });
+
+  it("決定的行が無い旧 null 行は消さず externalId を付与し、次回 upsert が同一行に収束する", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "イオン銀行", institution: "イオン銀行", category: "bank" });
+    insertLegacy(db, { accountId: "acc-1", date: "2026-10-02", description: "国税", amount: -2 });
+    insertLegacy(db, { accountId: "acc-1", date: "2026-10-02", description: "国税", amount: -2 });
+
+    // 決定的行が無い内容は削除しない（新方式で拾えない取引を消す恐れがあるため）
+    expect(dedupeLegacyTransactions(db)).toEqual({ deleted: 0, reassigned: 2 });
+    expect(db.select().from(schema.transactions).all()).toHaveLength(2);
+
+    // 再スクレイプ相当: 1 件だけ戻っても occurrence 0 に upsert され増殖しない
+    upsertTransactions(db, [
+      { externalId: null, accountId: "acc-1", date: "2026-10-02", description: "国税", amount: -2, category: null },
+    ]);
+    const all = db.select().from(schema.transactions).all();
+    expect(all).toHaveLength(2);
+    expect(all.every((t) => t.externalId !== null)).toBe(true);
   });
 });
