@@ -6,6 +6,7 @@ import type {
   Holding,
   Transaction,
 } from "@asset-scraping/shared";
+import { buildTransactionExternalId } from "@asset-scraping/shared";
 import { and, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { categorizeDbTransaction } from "./shared/categorize.ts";
 import type { Database } from "./client.ts";
@@ -266,12 +267,31 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
 export function upsertTransactions(db: Database, rows: Transaction[]): void {
   if (rows.length === 0) return;
   const ts = nowIso();
+  // ssnb は取引 ID を返さないため externalId が null になり得る。SQLite は
+  // unique index (account_id, external_id) の NULL を「重複なし」と扱うため、
+  // NULL のまま insert すると再スクレイプ毎に追記される。
+  // 内容（日付・摘要・金額）+ バッチ内出現回数で決定的な externalId を合成し、
+  // 同日同額同摘要の正当な重複も occurrence で区別して保持する。
+  const occurrenceByContent = new Map<string, number>();
   db.transaction((tx) => {
     for (const t of rows) {
       // 本家準拠: transactions.amount は常に正値、type で収支を区別する。
       // crawler 由来の符号はここで吸収し、読み出し側（getTransactions）で逆符号化する。
       const amount = Math.abs(t.amount);
       const type = t.amount >= 0 ? "income" : "expense";
+      let externalId = t.externalId;
+      if (!externalId) {
+        const contentKey = `${t.accountId}\u0000${t.date}\u0000${t.description}\u0000${t.amount}`;
+        const occurrence = occurrenceByContent.get(contentKey) ?? 0;
+        occurrenceByContent.set(contentKey, occurrence + 1);
+        externalId = buildTransactionExternalId(
+          t.accountId,
+          t.date,
+          t.description,
+          t.amount,
+          occurrence,
+        );
+      }
       // ssnb に大項目・中項目が無い行は内容ベース推定で補完する（crawler categorize.ts
       // と同じ本家 seed カテゴリ体系。db 側に重複実装しないため、
       // crawler 側がすでに推定済みなら t.category / t.subCategory を優先する）。
@@ -280,8 +300,8 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
       const subCategory = t.subCategory ?? fallback?.subCategory ?? null;
       tx.insert(transactions)
         .values({
-          externalId: t.externalId,
-          mfId: t.externalId,
+          externalId,
+          mfId: externalId,
           accountId: t.accountId,
           date: t.date,
           description: t.description,

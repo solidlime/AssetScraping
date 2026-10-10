@@ -94,6 +94,24 @@ export interface Transaction {
   subCategory?: string | null;
 }
 
+/**
+ * ssnb の /cf には取引 ID が存在しないため、内容（日付・摘要・金額）と
+ * 同日同内容の出現回数から決定的な externalId を合成する。
+ *
+ * - 再スクレイプで同じ内容は同じ ID → unique index + upsert により重複蓄積しない
+ * - 同日・同額・同摘要が正当に複数ある場合も occurrence で区別され消えない
+ * - 区切りに使う `:` は encodeURIComponent で必ずエスケープされるため衝突しない
+ */
+export function buildTransactionExternalId(
+  accountId: string,
+  date: string,
+  description: string,
+  amount: number,
+  occurrence: number,
+): string {
+  return `ssnb-tx:${encodeURIComponent(accountId)}:${date}:${encodeURIComponent(description)}:${amount}:${occurrence}`;
+}
+
 /** スクレイプ実行結果の統計 */
 export interface ScrapeRun {
   startedAt: string;

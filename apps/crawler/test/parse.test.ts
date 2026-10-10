@@ -176,6 +176,46 @@ describe("parseHoldings（/accounts/show/{id} の「種類・名称」テーブ�
     expect(parseHoldings("<table><tr><th>月</th><td>10月</td></tr></table>", "acc-1")).toEqual([]);
   });
 
+  it("集約テーブル（種類・名称）と内訳テーブル（名称）が併存しても、後発テーブルの同一金額行を二重計上しない", () => {
+    // 実測 ssnb 銀行/電子マネーページ: 集約行（種類・名称）と支店/カード行（名称）が
+    // 別テーブルで併存する。old parser は先頭の種類・名称テーブルのみ採用していた
+    const html = `
+    <table>
+      <thead><tr><th>種類・名称</th><th>残高</th></tr></thead>
+      <tbody>
+        <tr><td>アメシスト支店 普通預金</td><td>35円</td></tr>
+        <tr><td>SBIハイパー預金</td><td>37,818円</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>名称</th><th>残高</th></tr></thead>
+      <tbody>
+        <tr><td>アメシスト支店</td><td>35円</td></tr>
+        <tr><td>さくら支店(300)</td><td>37,818円</td></tr>
+      </tbody>
+    </table>`;
+    expect(parseHoldings(html, "acc-1").map((h) => h.name)).toEqual([
+      "アメシスト支店 普通預金",
+      "SBIハイパー預金",
+    ]);
+  });
+
+  it("同一ヘッダのテーブルが複数あっても、先行テーブルと同一金額の後発行は重複計上しない", () => {
+    const html = `
+    <table><tr><th>種類・名称</th><th>残高</th></tr><tr><td>SBIハイパー預金</td><td>37,818円</td></tr></table>
+    <table><tr><th>種類・名称</th><th>残高</th></tr><tr><td>さくら支店(300)</td><td>37,818円</td></tr></table>`;
+    expect(parseHoldings(html, "acc-1").map((h) => h.name)).toEqual(["SBIハイパー預金"]);
+  });
+
+  it("同一テーブル内の同額行は正当な別銘柄として保持する（テーブル跨ぎのみ重複排除）", () => {
+    const html = `
+    <table><tr><th>種類・名称</th><th>残高</th></tr>
+      <tr><td>普通預金 A</td><td>1,000円</td></tr>
+      <tr><td>普通預金 B</td><td>1,000円</td></tr>
+    </table>`;
+    expect(parseHoldings(html, "acc-1").map((h) => h.name)).toEqual(["普通預金 A", "普通預金 B"]);
+  });
+
   it("pns 形（評価額ヘッダ）テーブルを name=種類・名称 / value=評価額 で parse する（年金・保険口座）", () => {
     const html = `
     <table>
@@ -348,7 +388,7 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
     const txs = parseTransactions(html, "acc-1", new Date(2026, 9, 9));
     expect(txs).toEqual([
       {
-        externalId: null,
+        externalId: expect.any(String),
         accountId: "acc-1",
         date: "2026-10-02",
         description: "スーパー",
@@ -357,7 +397,7 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         subCategory: "食料品",
       },
       {
-        externalId: null,
+        externalId: expect.any(String),
         accountId: "acc-1",
         date: "2026-10-05",
         description: "給与",
@@ -366,7 +406,7 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         subCategory: "給与",
       },
       {
-        externalId: null,
+        externalId: expect.any(String),
         accountId: "acc-1",
         date: "2026-10-06",
         description: "口座間振替",
@@ -375,6 +415,30 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         subCategory: null,
       },
     ]);
+  });
+
+  it("内容（日付/摘要/金額）から決定的な externalId を合成する（再スクレイプで同一・全件一意）", () => {
+    const txs = parseTransactions(html, "acc-1", new Date(2026, 9, 9));
+    const ids = txs.map((t) => t.externalId);
+    expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    const again = parseTransactions(html, "acc-1", new Date(2026, 9, 9));
+    expect(again.map((t) => t.externalId)).toEqual(ids);
+  });
+
+  it("同日・同額・同摘要が正当に複数ある行は出現回数で区別し、消さない", () => {
+    const dupHtml = `
+    <table class="table table-hover">
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th></tr></thead>
+      <tbody>
+        <tr><td>10/01(水)</td><td>コーヒー</td><td>-450</td></tr>
+        <tr><td>10/01(水)</td><td>コーヒー</td><td>-450</td></tr>
+      </tbody>
+    </table>`;
+    const txs = parseTransactions(dupHtml, "acc-1", new Date(2026, 9, 9));
+    expect(txs).toHaveLength(2);
+    expect(txs[0]!.externalId).not.toBe(txs[1]!.externalId);
   });
 
   it("table-hover のテーブルが無ければ例外", () => {

@@ -215,3 +215,48 @@ describe("repo round-trip", () => {
     expect(getLastScrapedAt(db)).toBe("2026-02-14T07:00:00.000Z");
   });
 });
+
+describe("upsertTransactions の重複排除", () => {
+  const base = {
+    accountId: "acc-1",
+    date: "2026-02-11",
+    description: "食費",
+    amount: -3000,
+    category: "食費",
+  };
+
+  it("externalId が null の取引も内容ベース ID を合成し、再 upsert で重複しない", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "SMTB", institution: "SMTB", category: "bank" });
+
+    const rows = [
+      { externalId: null, ...base },
+      { externalId: null, ...base, description: "コーヒー", amount: -450 },
+    ];
+    upsertTransactions(db, rows);
+    // 再スクレイプ相当（同一内容を再度投入）
+    upsertTransactions(db, rows);
+
+    const all = db.select().from(schema.transactions).all();
+    expect(all).toHaveLength(2);
+    expect(all.every((t) => t.externalId !== null && t.mfId !== null)).toBe(true);
+  });
+
+  it("同日・同額・同摘要の正当な重複は出現回数で区別して保持する", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "SMTB", institution: "SMTB", category: "bank" });
+
+    const rows = [
+      { externalId: null, ...base, description: "コーヒー", amount: -450 },
+      { externalId: null, ...base, description: "コーヒー", amount: -450 },
+    ];
+    upsertTransactions(db, rows);
+    expect(db.select().from(schema.transactions).all()).toHaveLength(2);
+
+    // 再スクレイプしても 2 件のまま（それぞれ occurrence 0/1 に upsert される）
+    upsertTransactions(db, rows);
+    const all = db.select().from(schema.transactions).all();
+    expect(all).toHaveLength(2);
+    expect(new Set(all.map((t) => t.externalId)).size).toBe(2);
+  });
+});

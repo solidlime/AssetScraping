@@ -17,7 +17,7 @@ import type {
   Holding,
   Transaction,
 } from "@asset-scraping/shared";
-import { ACCOUNT_CATEGORIES } from "@asset-scraping/shared";
+import { ACCOUNT_CATEGORIES, buildTransactionExternalId } from "@asset-scraping/shared";
 import { categorizeTransaction } from "./categorize.js";
 import { parse } from "node-html-parser";
 
@@ -271,12 +271,18 @@ export function parseHoldings(
   const scrapedAt = new Date().toISOString();
 
   const holdings: Holding[] = [];
+  // テーブル跨ぎの重複排除用。ssnb の残高内訳は集約テーブル（種類・名称）と
+  // 支店/カード内訳テーブル（名称）が併存し、同一金額が別名で 2 回現れる。
+  // 先行テーブルの金額を集合に入れ、後発テーブルの同一金額行は二重計上とみなし skip する。
+  // （同一テーブル内の同額行は正当な別銘柄として保持するため、テーブル処理後に登録する）
+  const seenValuesFromEarlierTables = new Set<number>();
   for (const table of root.querySelectorAll("table")) {
     const headers = table.querySelectorAll("th").map((th) => headerKey(cellText(th)));
     if (headers.length === 0) continue;
     const cols = resolveHoldingsColumns(headers);
     if (cols === NONE) continue;
 
+    const tableValues: number[] = [];
     for (const row of table.querySelectorAll("tr")) {
       const tds = row.querySelectorAll("td");
       if (tds.length < 2) continue;
@@ -284,6 +290,8 @@ export function parseHoldings(
       if (!name || /^(合計|小計|total)/i.test(name)) continue;
       const value = parseYen(cellText(tds[cols.valueIdx]));
       if (value === null) continue;
+      // 0 円は重複判定に使わない（価値のない空行を消さない）
+      if (value !== 0 && seenValuesFromEarlierTables.has(value)) continue;
       const quantity =
         cols.quantityIdx !== null ? (parseQuantity(cellText(tds[cols.quantityIdx])) ?? 0) : 0;
       const averagePrice =
@@ -300,7 +308,9 @@ export function parseHoldings(
         unrealizedGain,
         scrapedAt,
       });
+      if (value !== 0) tableValues.push(value);
     }
+    for (const value of tableValues) seenValuesFromEarlierTables.add(value);
   }
   return holdings;
 }
@@ -412,6 +422,9 @@ export function parseTransactions(html: string, accountId: string, now: Date = n
   const minorIdx = idx("中項目");
 
   const txs: Transaction[] = [];
+  // ssnb の /cf には取引 ID が無い。同日同額同摘要の正当な重複を消さないよう、
+  // 内容 + 出現回数で決定的な externalId を合成し、upsert の同一性キーにする。
+  const occurrenceByContent = new Map<string, number>();
   for (const row of table.querySelectorAll("tr")) {
     const tds = row.querySelectorAll("td");
     if (tds.length < 3) continue;
@@ -429,7 +442,18 @@ export function parseTransactions(html: string, accountId: string, now: Date = n
     const estimated = categorizeTransaction(description);
     const category = [major, minor].filter(Boolean).join(" / ") || estimated?.category || null;
     const subCategory = estimated?.subCategory ?? null;
-    txs.push({ externalId: null, accountId, date, description, amount, category, subCategory });
+    const contentKey = `${date}\u0000${description}\u0000${amount}`;
+    const occurrence = occurrenceByContent.get(contentKey) ?? 0;
+    occurrenceByContent.set(contentKey, occurrence + 1);
+    txs.push({
+      externalId: buildTransactionExternalId(accountId, date, description, amount, occurrence),
+      accountId,
+      date,
+      description,
+      amount,
+      category,
+      subCategory,
+    });
   }
   return txs;
 }
