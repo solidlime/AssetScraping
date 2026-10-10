@@ -14,7 +14,9 @@ import { createDb, getOrCreateCategory, schema } from "@asset-scraping/db";
 import { estimateAssetCategory } from "./parse.js";
 import type { AccountCategory } from "@asset-scraping/shared";
 
-const db = createDb({ path: "../../.data/asset-scraping.db" });
+// DB_PATH 環境変数を解決（resolveDbPath）。Docker 内では /data/asset-scraping.db。
+// ホストで実行する場合は apps/crawler/.data/asset-scraping.db。
+const db = createDb();
 
 const accounts = db.select().from(schema.accounts).all();
 const categoryByAccountId = new Map<string, AccountCategory | undefined>(
