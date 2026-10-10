@@ -57,4 +57,4 @@ HTTP 接続（compose の `mcp` サービスが常駐している場合。URL �
 }
 ```
 
-ツール: `get_accounts` / `get_transactions` / `get_holdings` / `get_asset_history` / `get_monthly_summary`（すべて read-only）
+ツール: `get_accounts` / `get_transactions` / `get_holdings` / `get_asset_history` / `get_monthly_summary` / `get_account_alerts` / `get_financial_metrics`（すべて read-only）
