@@ -91,8 +91,22 @@ function cellText(cell: { text: string } | null | undefined): string {
 }
 
 /**
+ * /accounts の「更新状態」列テキスト → 本家語彙。
+ * 実測 2026-10 の正常系は「取得済み」。エラー系は未実測のため本家 mfIdAccountStatus の
+ * 表示語彙（接続エラー/更新中/連携停止中）で前方一致判定し、未知の語は undefined（=ok 扱い）にする。
+ */
+export function parseAccountStatusKind(text: string): "ok" | "error" | "updating" | "suspended" | undefined {
+  if (!text || text.includes("取得済み")) return "ok";
+  if (text.includes("エラー")) return "error";
+  if (text.includes("更新中")) return "updating";
+  if (text.includes("停止")) return "suspended";
+  return undefined;
+}
+
+/**
  * 口座一覧（/accounts の構造化テーブル）を parse する。実測（2026-10）:
  * - 各行 td[0] に a[href="/accounts/show/{id}"]（金融機関名テキスト）、td[1] に残高（"35円" 形式）
+ * - td[3] に更新状態（「取得済み」等）。判定結果は status に入れる
  */
 export function parseAccounts(html: string): Array<Account & { status: AccountStatus }> {
   const root = parse(html);
@@ -113,12 +127,20 @@ export function parseAccounts(html: string): Array<Account & { status: AccountSt
     if (!name || balance === null) continue;
 
     seen.add(id);
+    const statusKind = tds.length > 3 ? parseAccountStatusKind(cellText(tds[3])) : undefined;
     results.push({
       id,
       name,
       institution: cellText(link) || name,
       category: guessCategory(name),
-      status: { accountId: id, balance, scrapedAt },
+      status: {
+        accountId: id,
+        balance,
+        scrapedAt,
+        ...(statusKind !== undefined
+          ? { status: statusKind, statusText: cellText(tds[3]) }
+          : {}),
+      },
     });
   }
 

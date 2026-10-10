@@ -86,15 +86,56 @@ describe("parseAccounts（/accounts の口座一覧テーブル）", () => {
       name: "イオン銀行本サイト 1234",
       institution: "イオン銀行",
       category: "bank",
-      status: { balance: 1234567 },
+      status: { balance: 1234567, status: "ok", statusText: "取得済み" },
     });
     expect(accounts[1]).toMatchObject({
       id: "AbCdEf12345GHIJ6789",
       institution: "SBI 証券",
       category: "securities",
-      status: { balance: 46000000 },
+      status: { balance: 46000000, status: "ok" },
     });
     expect(accounts.every((a) => !a.name.includes("口座追加"))).toBe(true);
+  });
+
+  it("更新状態列（td[3]）を判定する: 取得済み=ok / エラー系=statusText 付き", () => {
+    const statusHtml = `
+    <html><body><table><tbody>
+      <tr>
+        <td><a href="/accounts/show/IDokokokokokokokokok1">正常口座</a></td>
+        <td>500,000円</td><td>2026-10-10</td><td>取得済み</td><td>更新</td><td>編集</td><td>削除</td>
+      </tr>
+      <tr>
+        <td><a href="/accounts/show/IDngngngngngngngngng2">エラー口座</a></td>
+        <td>0円</td><td>2026-10-09</td><td>接続エラー</td><td>更新</td><td>編集</td><td>削除</td>
+      </tr>
+      <tr>
+        <td><a href="/accounts/show/IDupupupupupupupupup3">更新中口座</a></td>
+        <td>10,000円</td><td>2026-10-09</td><td>更新中</td><td>更新</td><td>編集</td><td>削除</td>
+      </tr>
+      <tr>
+        <td><a href="/accounts/show/IDsusussusususususus4">停止口座</a></td>
+        <td>1,000円</td><td>2026-10-01</td><td>連携停止中</td><td>更新</td><td>編集</td><td>削除</td>
+      </tr>
+    </tbody></table></body></html>`;
+    const accounts = parseAccounts(statusHtml);
+    expect(accounts[0].status.status).toBe("ok");
+    expect(accounts[1].status.status).toBe("error");
+    expect(accounts[1].status.statusText).toBe("接続エラー");
+    expect(accounts[2].status.status).toBe("updating");
+    expect(accounts[3].status.status).toBe("suspended");
+  });
+
+  it("更新状態列が読めない行は status を付けない（=ok 扱い）", () => {
+    const minimalHtml = `
+    <html><body><table><tbody>
+      <tr>
+        <td><a href="/accounts/show/IDminminminminminmin1">最低限口座</a></td>
+        <td>500,000円</td>
+      </tr>
+    </tbody></table></body></html>`;
+    const accounts = parseAccounts(minimalHtml);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].status.status).toBeUndefined();
   });
 
   it("/accounts/show/ リンクが 1 件も無ければ例外", () => {
