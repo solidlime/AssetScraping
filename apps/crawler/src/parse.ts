@@ -219,13 +219,39 @@ export function resolveHoldingsColumns(headers: string[]): HoldingsColumns {
  * 実測 NRK(確定拠出年金): 「石川サンケン株式会社 1,004,921」は合計セルを持たない
  * 集約行で、明細 3 行（328,143 + 321,022 + 355,756）と同額。名前 regex に頼らず
  * 構造で除外する。明細が 2 行以上ある場合のみ適用する（1 行の自己一致は除外しない）。
+ *
+ * 誤除外ガード: 評価額 1 列だけでは正当な 3 行（600,000 / 400,000 / 1,000,000）で
+ * 3 行目が偶然「他行合計」に一致し、恒久欠落し得る。よって、
+ *  (a) 他行が 3 行以上ある（NRK 実データ形状: 集約行は value のみで cost/gain が null）、
+ *      または
+ *  (b) 全行で非 null の数値列が 2 列以上そろい、そのすべてで合計一致する、
+ * のいずれかを満たすときのみ集約行と判定する。どちらも満たさない場合は -1（除外しない）
+ * ＝誤削除より重複残りを選ぶ安全側。丸め由来の差は ±1 円を許容する。
  */
-function findAggregateRowIndex(rows: Array<{ value: number }>): number {
+function findAggregateRowIndex(
+  rows: Array<{ value: number; cost: number | null; gain: number | null }>,
+): number {
+  const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1;
+  // 全行で数値が取れている列（value は常に非 null）
+  const allCols = ["value", "cost", "gain"] as const;
+  const usable = allCols.filter((c) => rows.every((r) => r[c] !== null));
   for (let i = 0; i < rows.length; i++) {
     const others = rows.filter((_, j) => j !== i);
     if (others.length < 2) continue;
-    const sum = others.reduce((s, r) => s + r.value, 0);
-    if (rows[i]!.value !== 0 && rows[i]!.value === sum) return i;
+    if (rows[i]!.value === 0) continue;
+    // 評価額（value）の合計一致は必須
+    const valueSum = others.reduce((s, r) => s + r.value, 0);
+    if (!near(rows[i]!.value, valueSum)) continue;
+    // (a) 明細 3 行以上（NRK 実データ形状）
+    if (others.length >= 3) return i;
+    // (b) 全行非 null の数値列が 2 列以上そろい、そのすべてで合計一致
+    if (usable.length >= 2) {
+      const allMatch = usable.every((c) => {
+        const sum = others.reduce((s, r) => s + (r[c] as number), 0);
+        return near(rows[i]![c] as number, sum);
+      });
+      if (allMatch) return i;
+    }
   }
   return -1;
 }
@@ -339,7 +365,10 @@ export function parseHoldings(
     }
 
     // 構造ベースの集約行除外（他行合計と一致する行）。名前 regex では拾えないため。
-    const aggregateIdx = findAggregateRowIndex(candidates);
+    // 評価額/取得価額/評価損益を渡し、複数列一致を AND 条件に使う（誤除外防止）。
+    const aggregateIdx = findAggregateRowIndex(
+      candidates.map((c) => ({ value: c.value, cost: c.averagePrice, gain: c.unrealizedGain })),
+    );
     if (aggregateIdx >= 0) candidates.splice(aggregateIdx, 1);
 
     const tableValues: number[] = [];

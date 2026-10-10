@@ -405,6 +405,45 @@ describe("parseHoldings（実測 SBI証券/新生/NRK のテーブル構造）",
     ]);
     expect(holdings.reduce((s, h) => s + h.value, 0)).toBe(1004921);
   });
+
+  it("NRK 実データ形状（集約行は value のみで取得価額/評価損益が null）でも明細3行の合計行を除外する", () => {
+    const html = `
+    <table><thead><tr><th>名称</th><th>取得価額</th><th>現在価値</th><th>評価損益</th><th>評価損益率</th><th>取得日</th></tr></thead><tbody>
+      <tr><td>三菱UFJ DC海外株式インデックスファンド</td><td>150,812円</td><td>328,143円</td><td>177,331円</td><td>117.58%</td><td></td></tr>
+      <tr><td>ラッセル・DC外株ファンド</td><td>161,012円</td><td>321,022円</td><td>160,010円</td><td>100.64%</td><td></td></tr>
+      <tr><td>三菱UFJ 純金ファンド(愛称:ファインゴールド)</td><td>160,951円</td><td>355,756円</td><td>194,805円</td><td>97.64%</td><td></td></tr>
+      <tr><td>石川サンケン株式会社</td><td></td><td>1,004,921円</td><td></td><td></td><td></td></tr>
+    </tbody></table>`;
+    const holdings = parseHoldings(html, "nrk-1", { category: "pension", accountName: "NRK(確定拠出年金)" });
+    expect(holdings.map((h) => h.name)).toEqual([
+      "三菱UFJ DC海外株式インデックスファンド",
+      "ラッセル・DC外株ファンド",
+      "三菱UFJ 純金ファンド(愛称:ファインゴールド)",
+    ]);
+  });
+
+  it("評価額だけが他行合計に一致する正当な3行（取得価額が非整合）は除外しない", () => {
+    const html = `
+    <table><thead><tr><th>名称</th><th>取得価額</th><th>現在価値</th></tr></thead><tbody>
+      <tr><td>銘柄A</td><td>500,000円</td><td>600,000円</td></tr>
+      <tr><td>銘柄B</td><td>300,000円</td><td>400,000円</td></tr>
+      <tr><td>銘柄C</td><td>999,999円</td><td>1,000,000円</td></tr>
+    </tbody></table>`;
+    const holdings = parseHoldings(html, "acc-1", { category: "securities" });
+    expect(holdings.map((h) => h.name)).toEqual(["銘柄A", "銘柄B", "銘柄C"]);
+    expect(holdings.reduce((s, h) => s + h.value, 0)).toBe(2000000);
+  });
+
+  it("値1列しか無く他行が2行以下のテーブルでは集約行を除外しない", () => {
+    const html = `
+    <table><thead><tr><th>種類・名称</th><th>残高</th></tr></thead><tbody>
+      <tr><td>口座A</td><td>100,000円</td></tr>
+      <tr><td>口座B</td><td>200,000円</td></tr>
+      <tr><td>口座C</td><td>300,000円</td></tr>
+    </tbody></table>`;
+    const holdings = parseHoldings(html, "acc-1", { category: "bank" });
+    expect(holdings.map((h) => h.name)).toEqual(["口座A", "口座B", "口座C"]);
+  });
 });
 
 describe("parseAssetHistory（/bs/history の資産推移テーブル）", () => {
