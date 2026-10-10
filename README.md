@@ -58,3 +58,23 @@ HTTP 接続（compose の `mcp` サービスが常駐している場合。URL �
 ```
 
 ツール: `get_accounts` / `get_transactions` / `get_holdings` / `get_asset_history` / `get_monthly_summary` / `get_account_alerts` / `get_financial_metrics`（すべて read-only）
+
+## NAS デプロイ（GitHub Actions ビルド → GHCR pull 方式）
+
+イメージは GitHub Actions が main push 時に `ghcr.io/solidlime/asset-scraping-{crawler,web,mcp}` へ自動 publishing する（tar 転送方式は不要）。
+
+運用フロー: **NAS はイメージ pull → Portainer で stack 再デプロイ（pull_image: true）で終わる。**
+
+1. dsh コンテナ内で GHCR から 3 イメージを pull:
+
+   ```sh
+   docker pull ghcr.io/solidlime/asset-scraping-crawler:latest
+   docker pull ghcr.io/solidlime/asset-scraping-web:latest
+   docker pull ghcr.io/solidlime/asset-scraping-mcp:latest
+   ```
+
+   GHCR の pull は dsh 内 docker CLI から行う。イメージ名は compose.yml の `image:` と一致させること。
+2. migration・バックフィル・スクレイプ確認手順は既存のまま（coder コンテナ内で実施）。
+3. Portainer で stack 52 を再デプロイ（pull_image: true）。compose の image 名が GHCR 命名に統一されているため、そのまま pull される。
+
+どのコミットまで進んだかは GHCR の digest（`docker images --digests` または GHCR の package ページ）で確認できる。

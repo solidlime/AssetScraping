@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: apps/crawler/Dockerfile
-    image: asset-scraping-crawler
+    image: ghcr.io/solidlime/asset-scraping-crawler
     env_file: .env
     environment:
       - TZ=Asia/Tokyo
@@ -21,7 +21,7 @@ services:
   # WebUI ログイン（noVNC）。`docker compose up login-web` で一時起動する。
   # ホストブラウザで http://localhost:8767/vnc.html を開き、表示された Chromium で ssnb にログインする。
   login-web:
-    image: asset-scraping-crawler
+    image: ghcr.io/solidlime/asset-scraping-crawler
     env_file: .env
     environment:
       - TZ=Asia/Tokyo
@@ -37,7 +37,7 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    image: asset-scraping-web
+    image: ghcr.io/solidlime/asset-scraping-web
     environment:
       - TZ=Asia/Tokyo
       - DB_PATH=/data/asset-scraping.db
@@ -56,7 +56,7 @@ services:
     build:
       context: .
       dockerfile: apps/mcp/Dockerfile
-    image: asset-scraping-mcp
+    image: ghcr.io/solidlime/asset-scraping-mcp
     environment:
       - MCP_TRANSPORT=http
       - PORT=26280
