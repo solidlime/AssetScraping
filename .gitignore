@@ -29,7 +29,10 @@ playwright-report
 drizzle/meta
 
 # Local sqlite
+# 実データ（口座・取引・保有資産）を含むため必ず追跡除外する
 data/*.db
+.data/
+*.db
 *.db-wal
 *.db-shm
 
@@ -38,6 +41,10 @@ data/*.db
 
 # pi session artifacts
 .pi/
+
+# Local scratch artifacts
+.mcp_parse.py
+.openapi.json
 
 # Screenshots (local, never commit actual data views)
 apps/web/screenshots/
