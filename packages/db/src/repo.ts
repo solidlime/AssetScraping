@@ -271,11 +271,31 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
  * 差集合を削除する。他の口座・他ソースは name 集合が違うため影響しない。
  *
  * 空集合では何もしない（パースが 0 件を返したときに口座の保有資産を全消しする事故を防ぐ）。
+ *
+ * 部分パースガード: ssnb が語彙を変えて「非空だが不完全」な name 集合を返すと、空集合
+ * ガードをすり抜けて残りを全消しし、holding_values の FK cascade で過去スナップショット
+ * ごと失う。削除見込み toDelete が max(2, floor(existing/2)) を超えるときは削除せず 0 を
+ * 返して警告する（誤削除より旧行残りを選ぶ安全側）。
  * ponytail: 「今回 0 件」で旧行を消したい口座は prune されない。必要なら明示フラグで。
- * 返り値は削除件数。
+ * 返り値は削除件数。skip 時は 0（console.warn で判別可能）。
  */
 export function pruneHoldingsByName(db: Database, accountId: string, keepNames: string[]): number {
   if (keepNames.length === 0) return 0;
+  const keep = new Set(keepNames);
+  const existing = db
+    .select({ name: holdings.name })
+    .from(holdings)
+    .where(eq(holdings.accountId, accountId))
+    .all();
+  const toDelete = existing.filter((r) => !keep.has(r.name)).length;
+  const threshold = Math.max(2, Math.floor(existing.length / 2));
+  if (toDelete > threshold) {
+    console.warn(
+      `[pruneHoldingsByName] skip: accountId=${accountId} existing=${existing.length} toDelete=${toDelete} (部分パースの疑い)`,
+    );
+    return 0;
+  }
+  if (toDelete === 0) return 0;
   const result = db
     .delete(holdings)
     .where(and(eq(holdings.accountId, accountId), notInArray(holdings.name, keepNames)))

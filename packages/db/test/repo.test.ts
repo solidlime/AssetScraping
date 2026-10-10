@@ -2,7 +2,7 @@ import BetterSqlite3 from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import * as schema from "../src/schema.js";
 import {
   getAllAccountStatuses,
@@ -296,6 +296,46 @@ describe("pruneHoldingsByName（スクレイプ時の stale cleanup）", () => {
     upsertHoldings(db, [mk("acc-1", "普通預金", 100)]);
     expect(pruneHoldingsByName(db, "acc-1", [])).toBe(0);
     expect(getHoldings(db, "acc-1")).toHaveLength(1);
+  });
+
+  it("削除見込みが既存の半分を超えるときは skip し何も削除しない（部分パースの疑い）", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "銀行", institution: "銀行", category: "bank" });
+    upsertHoldings(db, [
+      mk("acc-1", "株式A", 100),
+      mk("acc-1", "株式B", 200),
+      mk("acc-1", "株式C", 300),
+      mk("acc-1", "投信D", 400),
+    ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // 既存4行のうち3行が keepNames に無い（> half=2）→ prune せず 0 を返す
+      const removed = pruneHoldingsByName(db, "acc-1", ["株式A"]);
+      expect(removed).toBe(0);
+      expect(getHoldings(db, "acc-1")).toHaveLength(4);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const msg = String(warn.mock.calls[0]?.[0] ?? "");
+      expect(msg).toContain("acc-1");
+      expect(msg).toContain("existing=4");
+      expect(msg).toContain("toDelete=3");
+      expect(msg).toContain("skip");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("削除見込みが閾値以下なら従来どおり削除する（既存4行中1行）", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "銀行", institution: "銀行", category: "bank" });
+    upsertHoldings(db, [
+      mk("acc-1", "株式A", 100),
+      mk("acc-1", "株式B", 200),
+      mk("acc-1", "株式C", 300),
+      mk("acc-1", "旧名D", 400),
+    ]);
+    const removed = pruneHoldingsByName(db, "acc-1", ["株式A", "株式B", "株式C"]);
+    expect(removed).toBe(1);
+    expect(getHoldings(db, "acc-1").map((h) => h.name).sort()).toEqual(["株式A", "株式B", "株式C"]);
   });
 });
 
