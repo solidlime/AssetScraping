@@ -13,7 +13,7 @@ import { TransactionMobileView } from "./transaction-mobile-view";
 import type { Transaction } from "./types";
 import { useTransactionFiltering } from "./use-transaction-filtering";
 
-const PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 20;
 
 function getDateRange(transactions: Transaction[]): { start: string; end: string } | null {
   if (transactions.length === 0) return null;
@@ -42,12 +42,14 @@ interface TransactionTableClientProps {
   transactions: Transaction[];
   isMonthView?: boolean;
   showYearSelector?: boolean;
+  pageSize?: number;
 }
 
 export function TransactionTableClient({
   transactions,
   isMonthView = false,
   showYearSelector = false,
+  pageSize = DEFAULT_PAGE_SIZE,
 }: TransactionTableClientProps) {
   const { selectedDate, onDateChange } = useDateFilter() ?? {
     selectedDate: null,
@@ -87,7 +89,7 @@ export function TransactionTableClient({
   } = useTransactionFiltering({
     transactions,
     selectedDate,
-    pageSize: PAGE_SIZE,
+    pageSize,
     yearFilterEnabled: showYearSelector,
   });
 
@@ -156,7 +158,7 @@ export function TransactionTableClient({
           <Pagination
             currentPage={currentPage}
             totalPages={totalPages}
-            pageSize={PAGE_SIZE}
+            pageSize={pageSize}
             totalItems={filteredAndSortedTransactions.length}
             onPageChange={setCurrentPage}
             scrollTargetRef={scrollTargetRef}

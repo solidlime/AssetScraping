@@ -9,4 +9,8 @@ export const mfUrls = {
   portfolio: `${BASE_URL}/bs/portfolio`,
   liability: `${BASE_URL}/bs/liability`,
   accounts: `${BASE_URL}/accounts`,
+  /** 口座詳細ページURL を生成 */
+  accountDetail(mfId: string, type: "show" | "show_manual" = "show"): string {
+    return `${BASE_URL}/accounts/${type}/${mfId}`;
+  },
 } as const;
