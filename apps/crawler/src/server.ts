@@ -22,6 +22,7 @@ import {
   type Database,
 } from "@asset-scraping/db";
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
+import { getOtpStatus, submitOtpCode } from "./otp.js";
 import { TwoFactorRequiredError } from "./auth.js";
 import { nextOccurrenceJst } from "./scheduler.js";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -149,6 +150,17 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+/** POST ボディを読む（/otp/submit 用） */
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.setEncoding("utf8");
+    req.on("data", (c) => (data += c));
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
 async function handleSettingsPut(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const body = await readJsonBody(req);
@@ -224,6 +236,27 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
   if (req.method === "PUT" && url === "/settings") {
     await handleSettingsPut(req, res);
+    return;
+  }
+  if (req.method === "GET" && url === "/otp/status") {
+    // 2FA OTP 待ち状態の外部可視化（ステータスファイルの内容をそのまま返す）
+    sendJson(res, 200, { ok: true, ...getOtpStatus() });
+    return;
+  }
+  if (req.method === "POST" && url === "/otp/submit") {
+    try {
+      const parsed = JSON.parse(await readBody(req)) as { code?: string };
+      const code = typeof parsed.code === "string" ? parsed.code : "";
+      if (!code) {
+        sendJson(res, 400, { ok: false, error: "code is required" });
+        return;
+      }
+      // 同プロセスの待ち手がいれば true（即時解決）。無ければステータスファイルに残す
+      const delivered = submitOtpCode(code);
+      sendJson(res, 200, { ok: true, delivered });
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid JSON body" });
+    }
     return;
   }
   if (req.method === "GET" && url === "/health") {
