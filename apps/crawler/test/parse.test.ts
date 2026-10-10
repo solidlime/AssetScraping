@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseAccountStatusKind,
   parseAccounts,
   parseAssetHistory,
   parseDate,
@@ -125,6 +126,32 @@ describe("parseAccounts（/accounts の口座一覧テーブル）", () => {
     expect(accounts[3].status.status).toBe("suspended");
   });
 
+  it("実測 ssnb の td[3]: display:none の placeholder（更新中）と可視ステータス（正常）が同居しても ok と判定する", () => {
+    // NAS 実データの生 HTML（2026-10-10 実測）。td[3] は display:none の
+    // placeholder スパン「更新中」と、可視のステータススパン「正常」を同居させる。
+    // textContent 相当（.text）で読むと "更新中 正常" になり updating へ誤判定する。
+    const realHtml = `
+    <html><body><table><tbody>
+      <tr>
+        <td><a href="/accounts/show/IP0DwtoCovpotYPHltPahQ">イオン銀行</a></td>
+        <td>1,234,567円</td><td>2026-10-10</td>
+        <td>
+          <img id="js-hidden-loading-IP0DwtoCovpotYPHltPahQ" style="display: none" src="https://forx-cons-assets.example.com/loading.gif">
+          <span id="js-hidden-status-sentence-span-IP0DwtoCovpotYPHltPahQ" style="display: none">更新中</span>
+          <span id="js-status-sentence-span-IP0DwtoCovpotYPHltPahQ">
+            <span id="js-status-sentence-s">正常</span>
+          </span>
+        </td>
+        <td>更新</td><td>編集</td><td>削除</td>
+      </tr>
+    </tbody></table></body></html>`;
+    const accounts = parseAccounts(realHtml);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].status.status).toBe("ok");
+    // statusText も可視テキストのみ（隠しの「更新中」を含まない）
+    expect(accounts[0].status.statusText).toBe("正常");
+  });
+
   it("更新状態列が読めない行は status を付けない（=ok 扱い）", () => {
     const minimalHtml = `
     <html><body><table><tbody>
@@ -140,6 +167,20 @@ describe("parseAccounts（/accounts の口座一覧テーブル）", () => {
 
   it("/accounts/show/ リンクが 1 件も無ければ例外", () => {
     expect(() => parseAccounts("<html><body><p>empty</p></body></html>")).toThrow(ScrapeParseError);
+  });
+});
+
+describe("parseAccountStatusKind（確定語を 更新中 より優先）", () => {
+  it("隠し placeholder の「更新中」と可視語が連結しても確定語を優先する", () => {
+    expect(parseAccountStatusKind("更新中 正常")).toBe("ok");
+    expect(parseAccountStatusKind("更新中 取得済み")).toBe("ok");
+  });
+
+  it("既存語彙（更新中/エラー/停止）の判定を維持する", () => {
+    expect(parseAccountStatusKind("更新中")).toBe("updating");
+    expect(parseAccountStatusKind("接続エラー")).toBe("error");
+    expect(parseAccountStatusKind("連携停止中")).toBe("suspended");
+    expect(parseAccountStatusKind("")).toBe("ok");
   });
 });
 

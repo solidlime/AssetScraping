@@ -19,7 +19,7 @@ import type {
 } from "@asset-scraping/shared";
 import { ACCOUNT_CATEGORIES, buildTransactionExternalId } from "@asset-scraping/shared";
 import { categorizeTransaction } from "./categorize.js";
-import { parse } from "node-html-parser";
+import { parse, NodeType, type Node, type HTMLElement as HtmlElement } from "node-html-parser";
 
 export class ScrapeParseError extends Error {
   constructor(what: string) {
@@ -85,9 +85,38 @@ export function parseDate(text: string, now: Date = new Date()): string | null {
 // 口座一覧・残高
 // ---------------------------------------------------------------------------
 
-/** セルテキストの正規化（改行・複数空白 → 単一空白、前後空白トリム） */
-function cellText(cell: { text: string } | null | undefined): string {
-  return cell ? cell.text.replace(/\s+/g, " ").trim() : "";
+/**
+ * 要素が非表示かどうか（display:none / visibility:hidden / hidden 属性）。
+ * ssnb /accounts の td[3] は display:none の placeholder「更新中」と可視の「正常」を
+ * 同居させるため、隠し要素を除外しないと textContent に「更新中」が混入する。
+ */
+function isHiddenElement(el: HtmlElement): boolean {
+  if (el.hasAttribute("hidden")) return true;
+  const style = el.getAttribute("style") ?? "";
+  return /display\s*:\s*none|visibility\s*:\s*hidden/i.test(style);
+}
+
+/**
+ * 可視テキストのみを連結する（隠し要素とその子孫を除外）。
+ * node-html-parser の `.text` / `.textContent` / `.innerText` / `.rawText` はいずれも
+ * display:none を除外しない（実測 9.0.4: すべて "更新中 正常" を返す）。自前で除外する。
+ */
+function visibleText(node: Node): string {
+  if (node.nodeType === NodeType.TEXT_NODE) return node.text; // decode 済み
+  if (node.nodeType !== NodeType.ELEMENT_NODE) return ""; // コメント等は無視
+  const el = node as HtmlElement;
+  if (isHiddenElement(el)) return "";
+  return el.childNodes.map((child) => visibleText(child)).join("");
+}
+
+/** セルテキストの正規化（可視テキストのみ、改行・複数空白 → 単一空白、前後空白トリム） */
+function cellText(cell: HtmlElement | null | undefined): string {
+  if (!cell) return "";
+  return cell.childNodes
+    .map((child) => visibleText(child))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -96,7 +125,9 @@ function cellText(cell: { text: string } | null | undefined): string {
  * 表示語彙（接続エラー/更新中/連携停止中）で前方一致判定し、未知の語は undefined（=ok 扱い）にする。
  */
 export function parseAccountStatusKind(text: string): "ok" | "error" | "updating" | "suspended" | undefined {
-  if (!text || text.includes("取得済み")) return "ok";
+  // 確定語（正常/取得済み）を「更新中」より先に評価する。ssnb td[3] の隠し placeholder
+  // 「更新中」と可視ステータスが連結して届いても updating に化けないための二重防御。
+  if (!text || text.includes("取得済み") || text.includes("正常")) return "ok";
   if (text.includes("エラー")) return "error";
   if (text.includes("更新中")) return "updating";
   if (text.includes("停止")) return "suspended";
