@@ -48,6 +48,10 @@ data/*.db
 .refs/
 .probe*
 nul
+/.src_*
+/.resp.txt
+/.servers_tools.json
+.tmp-otp/
 
 # Screenshots (local, never commit actual data views)
 apps/web/screenshots/
