@@ -81,6 +81,33 @@ export const cashFlowPeriods = sqliteTable(
   (table) => [uniqueIndex("cash_flow_periods_month_idx").on(table.month)],
 );
 
+/**
+ * /cf/monthly の月×カテゴリ集計（行をそのまま保存する）。
+ *
+ * 集計ロジックは DB に持たせない（読む側で行う）。
+ * 二重計上の罠を消費側で扱えるよう `kind` をそのまま保存する:
+ * - `収入合計` / `収入` → income（`収入` は `収入合計` と同額のカテゴリ行）
+ * - `支出合計` / 支出カテゴリ行 → expense
+ * - `収支合計` → balance（派生値。合算に使わない）
+ *
+ * unique キーは (month, row_name)。同一月に同名行は存在しない（実測）。
+ */
+export const cashFlowMonthly = sqliteTable(
+  "cash_flow_monthly",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** YYYY-MM */
+    month: text("month").notNull(),
+    /** 行ラベル（`収入合計` / `支出合計` / `収支合計` / `食費` 等） */
+    rowName: text("row_name").notNull(),
+    kind: text("kind").notNull(),
+    amount: integer("amount").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [uniqueIndex("cash_flow_monthly_month_row_name_idx").on(table.month, table.rowName)],
+);
+
 /** 本家 holding_values と同構造（snapshot 駆動の銘柄評価額） */
 export const holdingValues = sqliteTable(
   "holding_values",

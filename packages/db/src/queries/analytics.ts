@@ -13,6 +13,7 @@ import {
   getLatestTotalAssets,
   getAssetBreakdownByCategory,
 } from "./asset.ts";
+import { getMonthlyCashFlowCategories, getMonthlyCashFlowTotals } from "./summary.ts";
 import { resolveGroupId } from "../shared/group-filter.ts";
 
 // ============================================================================
@@ -132,6 +133,10 @@ interface CollectedData {
     amount: number;
     type: string;
   }>;
+  /** cash_flow_monthly の合計行（当月を除外済み。空なら transactions ベースにフォールバック） */
+  monthlyCashFlow: Array<{ month: string; income: number; expense: number }>;
+  /** cash_flow_monthly の支出カテゴリ行（当月・合計行を除外済み） */
+  monthlyCashFlowCategories: Array<{ month: string; category: string; amount: number }>;
   assetHistory: Array<{
     date: string;
     totalAssets: number;
@@ -191,7 +196,26 @@ async function collectData(groupId: string, db: Db): Promise<CollectedData> {
       change: h.change ?? 0,
     }));
 
-  return { totalAssets, liquidAssets, holdings, liabilities, transactions, assetHistory };
+  // /cf/monthly の月×行。**当月は除外**する（本家準拠。当月は /cf の transactions が正）。
+  const cashFlowTotals = getMonthlyCashFlowTotals(db);
+  const monthlyCashFlow = [...cashFlowTotals.entries()]
+    .filter(([month]) => month !== currentMonth)
+    .map(([month, v]) => ({ month, income: v.income, expense: v.expense }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+  const monthlyCashFlowCategories = getMonthlyCashFlowCategories(db).filter(
+    (c) => c.month !== currentMonth,
+  );
+
+  return {
+    totalAssets,
+    liquidAssets,
+    holdings,
+    liabilities,
+    transactions,
+    assetHistory,
+    monthlyCashFlow,
+    monthlyCashFlowCategories,
+  };
 }
 
 // ============================================================================
@@ -204,11 +228,20 @@ function countUniqueMonths(dates: string[]): number {
 }
 
 function calculateSavings(data: CollectedData): AnalyticsMetrics["savings"] {
-  const { totalAssets, liquidAssets, transactions } = data;
-  const expenses = transactions.filter((t) => t.type === "expense");
-  const totalExpenses = expenses.reduce((sum, t) => sum + t.amount, 0);
-  const monthsCount = countUniqueMonths(expenses.map((t) => t.date));
-  const monthlyExpenseAvg = monthsCount > 0 ? Math.round(totalExpenses / monthsCount) : 0;
+  const { totalAssets, liquidAssets, transactions, monthlyCashFlow } = data;
+  let monthlyExpenseAvg: number;
+  if (monthlyCashFlow.length > 0) {
+    // cash_flow_monthly の `支出合計` の月平均（当月は collectData で除外済み）。
+    // 本家準拠で当月を平均に混ぜない。
+    const totalExpenses = monthlyCashFlow.reduce((sum, m) => sum + m.expense, 0);
+    monthlyExpenseAvg = Math.round(totalExpenses / monthlyCashFlow.length);
+  } else {
+    // フォールバック: transactions（当月除外済み）の月平均
+    const expenses = transactions.filter((t) => t.type === "expense");
+    const totalExpenses = expenses.reduce((sum, t) => sum + t.amount, 0);
+    const monthsCount = countUniqueMonths(expenses.map((t) => t.date));
+    monthlyExpenseAvg = monthsCount > 0 ? Math.round(totalExpenses / monthsCount) : 0;
+  }
   const emergencyFundMonths =
     monthlyExpenseAvg > 0 ? Math.round((liquidAssets / monthlyExpenseAvg) * 10) / 10 : 0;
   return { totalAssets, liquidAssets, monthlyExpenseAvg, emergencyFundMonths };
@@ -264,18 +297,35 @@ function calculateDiversificationScore(holdings: Array<{ amount: number }>): num
 }
 
 function calculateSpending(data: CollectedData): AnalyticsMetrics["spending"] {
-  const { transactions } = data;
-  const expenses = transactions.filter((t) => t.type === "expense");
+  const { transactions, monthlyCashFlow, monthlyCashFlowCategories } = data;
 
-  const byCategory: Record<string, number> = {};
-  for (const expense of expenses) {
-    const category = expense.category ?? "未分類";
-    byCategory[category] = (byCategory[category] ?? 0) + expense.amount;
+  // /cf/monthly 優先（カテゴリ行から月平均。合計行は混ぜない）
+  let byCategory: Record<string, number> = {};
+  let monthsCount: number;
+  if (monthlyCashFlowCategories.length > 0 || monthlyCashFlow.length > 0) {
+    for (const c of monthlyCashFlowCategories) {
+      byCategory[c.category] = (byCategory[c.category] ?? 0) + c.amount;
+    }
+    monthsCount = new Set(monthlyCashFlow.map((m) => m.month)).size;
+  } else {
+    const expenses = transactions.filter((t) => t.type === "expense");
+    for (const expense of expenses) {
+      const category = expense.category ?? "未分類";
+      byCategory[category] = (byCategory[category] ?? 0) + expense.amount;
+    }
+    monthsCount = countUniqueMonths(expenses.map((t) => t.date));
   }
 
   const totalExpenses = Object.values(byCategory).reduce((sum, v) => sum + v, 0);
-  const monthsCount = countUniqueMonths(expenses.map((t) => t.date));
-  const monthlyAverage = monthsCount > 0 ? Math.round(totalExpenses / monthsCount) : 0;
+  // 月平均支出は合計行（支出合計）を真実として使う（カテゴリ和は一致しないことがある）
+  const monthlyAverage =
+    monthlyCashFlow.length > 0
+      ? Math.round(
+          monthlyCashFlow.reduce((sum, m) => sum + m.expense, 0) / monthlyCashFlow.length,
+        )
+      : monthsCount > 0
+        ? Math.round(totalExpenses / monthsCount)
+        : 0;
 
   const topCategories = Object.entries(byCategory)
     .map(([category, amount]) => ({
@@ -435,27 +485,37 @@ function calculateGrowth(data: CollectedData): AnalyticsMetrics["growth"] {
 }
 
 function calculateBalance(data: CollectedData): AnalyticsMetrics["balance"] {
-  const { transactions } = data;
-  const byMonth: Record<string, { income: number; expense: number }> = {};
+  const { transactions, monthlyCashFlow } = data;
 
-  for (const t of transactions) {
-    const month = t.date.slice(0, 7);
-    if (!byMonth[month]) byMonth[month] = { income: 0, expense: 0 };
-    if (t.type === "income") {
-      byMonth[month].income += t.amount;
-    } else if (t.type === "expense") {
-      byMonth[month].expense += t.amount;
-    }
-  }
-
-  const trend = Object.entries(byMonth)
-    .map(([month, { income, expense }]) => ({
-      month,
-      income,
-      expense,
-      balance: income - expense,
-    }))
-    .sort((a, b) => a.month.localeCompare(b.month));
+  // /cf/monthly 優先（合計行のみ。当月は collectData で除外済み）
+  const trend =
+    monthlyCashFlow.length > 0
+      ? monthlyCashFlow.map((m) => ({
+          month: m.month,
+          income: m.income,
+          expense: m.expense,
+          balance: m.income - m.expense,
+        }))
+      : (() => {
+          const byMonth: Record<string, { income: number; expense: number }> = {};
+          for (const t of transactions) {
+            const month = t.date.slice(0, 7);
+            if (!byMonth[month]) byMonth[month] = { income: 0, expense: 0 };
+            if (t.type === "income") {
+              byMonth[month].income += t.amount;
+            } else if (t.type === "expense") {
+              byMonth[month].expense += t.amount;
+            }
+          }
+          return Object.entries(byMonth)
+            .map(([month, { income, expense }]) => ({
+              month,
+              income,
+              expense,
+              balance: income - expense,
+            }))
+            .sort((a, b) => a.month.localeCompare(b.month));
+        })();
 
   const totalIncome = trend.reduce((sum, m) => sum + m.income, 0);
   const totalExpense = trend.reduce((sum, m) => sum + m.expense, 0);

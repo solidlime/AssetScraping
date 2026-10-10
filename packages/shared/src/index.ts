@@ -14,6 +14,11 @@ export const SSNB_URLS = {
   assetHistory: `${SSNB_BASE_URL}/bs/history`,
   /** 取引明細（常に当月分のみ。旧 /transactions/{ym} は 500 で廃止済み） */
   transactions: `${SSNB_BASE_URL}/cf`,
+  /**
+   * 月×カテゴリ集計（1 リクエストで直近 6 か月分を返す）。
+   * 月ナビは `?base_date=YYYY/MM/DD`。
+   */
+  monthlyCashFlow: `${SSNB_BASE_URL}/cf/monthly`,
 } as const;
 
 /** 口座種別（カテゴリ大分類） */
@@ -115,6 +120,33 @@ export function buildTransactionExternalId(
   occurrence: number,
 ): string {
   return `ssnb-tx:${encodeURIComponent(accountId)}:${date}:${encodeURIComponent(description)}:${amount}:${occurrence}`;
+}
+
+/**
+ * /cf/monthly の 1 行（行ラベルそのまま）。
+ *
+ * `kind` は**行名で判定**する（位置依存にしない。ssnb 側で行順が変わり得るため）:
+ * - `収入合計` / `収入` → `"income"`
+ * - `支出合計` / 支出カテゴリ行 → `"expense"`
+ * - `収支合計` → `"balance"`（`収入合計 - 支出合計` の派生値。保存はするが合算に使わない）
+ *
+ * 二重計上の罠: `収入` は「収入」という唯一のカテゴリ行で `収入合計` と同額。
+ * どちらもそのまま保存するが、**合計を求める時は `〜合計` 行のみ**を使うこと
+ * （`収入` 行を足すと収入が 2 倍になる）。
+ */
+export interface MonthlyCashFlowRow {
+  /** 行ラベル（`収入合計` / `支出合計` / `収支合計` / `食費` 等） */
+  name: string;
+  kind: "income" | "expense" | "balance";
+  amount: number;
+}
+
+/** /cf/monthly の 1 か月分（月ヘッダ 1 列に対応） */
+export interface MonthlyCashFlowMonth {
+  /** YYYY-MM（月ヘッダ `2026/05/01〜` の先頭年月） */
+  month: string;
+  /** 行順はヘッダ順・行順そのまま */
+  rows: MonthlyCashFlowRow[];
 }
 
 /** スクレイプ実行結果の統計 */

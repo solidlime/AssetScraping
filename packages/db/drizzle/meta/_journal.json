@@ -29,6 +29,13 @@
       "when": 1791589776987,
       "tag": "0003_strong_justice",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791646949734,
+      "tag": "0004_flippant_silver_centurion",
+      "breakpoints": true
     }
   ]
 }

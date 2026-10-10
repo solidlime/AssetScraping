@@ -32,6 +32,7 @@ export function resetTestDb(db: Database): void {
   db.delete(schema.holdings).run();
   db.delete(schema.accountStatuses).run();
   db.delete(schema.transactions).run();
+  db.delete(schema.cashFlowMonthly).run();
   db.delete(schema.cashFlowPeriods).run();
   db.delete(schema.assetHistoryCategories).run();
   db.delete(schema.assetHistory).run();

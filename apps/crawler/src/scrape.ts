@@ -19,6 +19,7 @@ import {
   upsertDailySnapshot,
   upsertHoldings,
   upsertHoldingValues,
+  upsertMonthlyCashFlow,
   upsertTransactions,
   pruneHoldingsByName,
   type Database,
@@ -35,6 +36,7 @@ import {
   parseAccounts,
   parseAssetHistory,
   parseHoldings,
+  parseMonthlyCashFlow,
   parseTransactions,
 } from "./parse.js";
 
@@ -116,6 +118,16 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     const txs = parseTransactions(cfHtml, accounts[0]?.id ?? "");
     upsertTransactions(db, txs);
     stats.transactionsUpserted = txs.length;
+
+    // 4b) 月×カテゴリ集計（/cf/monthly、1 リクエストで 6 か月分）。
+    // 過去月の金額はここでしか取れない。失敗しても他の取得を巻き込まないよう fail-soft にする。
+    try {
+      const monthlyHtml = await fetcher.fetch(SSNB_URLS.monthlyCashFlow);
+      const months = parseMonthlyCashFlow(monthlyHtml);
+      upsertMonthlyCashFlow(db, months);
+    } catch {
+      // 取れなければ既存の cash_flow_monthly を維持（過去月は前回分のまま）
+    }
 
     // 5) 本家互換派生テーブル: holding_values / cash_flow_periods / group_accounts。
     // institution_categories が確定した時点で accounts.category_id を自動割当する

@@ -15,6 +15,8 @@ import type {
   AccountStatus,
   AssetHistoryPoint,
   Holding,
+  MonthlyCashFlowMonth,
+  MonthlyCashFlowRow,
   Transaction,
 } from "@asset-scraping/shared";
 import { ACCOUNT_CATEGORIES, buildTransactionExternalId } from "@asset-scraping/shared";
@@ -610,6 +612,65 @@ export function parseTransactions(html: string, accountId: string, now: Date = n
     });
   }
   return txs;
+}
+
+/**
+ * /cf/monthly（月×カテゴリ集計）を行×月のフラットな配列に展開する。
+ *
+ * 実測構造（2026-10）: 対象は table[1]。
+ * - 1 行目 = 月ヘッダ `th`（先頭に幅指定の空 `th`、以降 `2026/05/01〜` ×6 列）
+ * - 翌行以降 = ラベル `td` + 各月の金額セル（`636,232円` 形式、`0円` も実在）
+ *
+ * kind は**行名**で決める（カテゴリの並びは ssnb 側で変わり得るため位置依存にしない）:
+ * 実測の `<tr class>` は in_sum/in/out_sum/out/total だが、クラスは保証が無いので
+ * 行名の `〜合計` 判定を正とする。
+ * - `収入合計` / `収入` → income（`収入` は `収入合計` と同額のカテゴリ行）
+ * - `支出合計` → expense、その他のカテゴリ行も expense
+ * - `収支合計` → balance（派生値。保存はするが合算に使わない）
+ *
+ * テーブルまたは月ヘッダが見つからなければ空配列（parseAssetHistory と同じ防御方針）。
+ * 解釈できないセルは skip し throw しない。
+ */
+export function parseMonthlyCashFlow(html: string): MonthlyCashFlowMonth[] {
+  const root = parse(html);
+  const table = root.querySelectorAll("table").find((t) =>
+    t.querySelectorAll("th").some((th) => /\d{4}\/\d{1,2}\/\d{1,2}/.test(cellText(th))),
+  );
+  if (!table) return [];
+
+  const trs = table.querySelectorAll("tr");
+  const headerRow = trs.find((tr) => tr.querySelectorAll("td").length === 0);
+  if (!headerRow) return [];
+
+  // 先頭の空 th（幅指定）を落として月列だけを取り出す。列順はヘッダ順を守る。
+  const months: string[] = [];
+  for (const th of headerRow.querySelectorAll("th")) {
+    const m = /(\d{4})\/(\d{1,2})\/\d{1,2}/.exec(cellText(th));
+    if (m) months.push(`${m[1]}-${m[2]!.padStart(2, "0")}`);
+  }
+  if (months.length === 0) return [];
+
+  const byMonth = months.map((month): MonthlyCashFlowMonth => ({ month, rows: [] }));
+  for (const tr of trs) {
+    const tds = tr.querySelectorAll("td");
+    if (tds.length < months.length + 1) continue;
+    const name = cellText(tds[0]);
+    if (!name) continue;
+    months.forEach((month, i) => {
+      const amount = parseYen(cellText(tds[i + 1]));
+      if (amount === null) return;
+      byMonth[i]!.rows.push({ name, kind: classifyMonthlyRow(name), amount });
+    });
+  }
+  return byMonth;
+}
+
+/** 行ラベル → kind。`〜合計` を先に判定し、位置には依存しない。 */
+function classifyMonthlyRow(name: string): MonthlyCashFlowRow["kind"] {
+  if (name === "収支合計") return "balance";
+  if (name === "収入合計" || name === "収入") return "income";
+  // `支出合計` および支出カテゴリ行
+  return "expense";
 }
 
 export { ACCOUNT_CATEGORIES };

@@ -2,6 +2,7 @@ import { getShortMonth } from "../../lib/format";
 import { AmountDisplay } from "../ui/amount-display";
 import { Card, CardContent } from "../ui/card";
 import { MetricLabel } from "../ui/metric-label";
+import { monthlySavingsRate } from "./monthly-summary-utils";
 
 interface MonthlySummaryCardProps {
   month: string;
@@ -23,7 +24,7 @@ export function MonthlySummaryCard({
       : totalExpense > 0
         ? 100
         : 0;
-  const savingsRate = totalIncome > 0 ? ((totalIncome - totalExpense) / totalIncome) * 100 : null;
+  const savingsRate = monthlySavingsRate(month, totalIncome, totalExpense);
 
   return (
     <Card href={href} className="border-primary/30 hover:border-primary transition-colors">

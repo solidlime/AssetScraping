@@ -4,6 +4,7 @@ import type {
   AccountStatus,
   AssetHistoryPoint,
   Holding,
+  MonthlyCashFlowMonth,
   Transaction,
 } from "@asset-scraping/shared";
 import { buildTransactionExternalId } from "@asset-scraping/shared";
@@ -16,6 +17,7 @@ import {
   accountStatuses,
   assetCategories,
   assetHistory,
+  cashFlowMonthly,
   cashFlowPeriods,
   dailySnapshots,
   groupAccounts,
@@ -848,6 +850,33 @@ export function upsertCashFlowPeriods(
     }
   });
   return periods.length;
+}
+
+/**
+ * /cf/monthly の月×カテゴリ集計（行そのまま）を冪等 upsert する。
+ * unique キーは (month, row_name)。同じ月を再スクレイプしても行数は増えない。
+ * `収入` 行を捨てずそのまま保存する（合計は読取側が `〜合計` 行のみから取る）。
+ * 戻り値は書き込み件数（月数ではなく行数）。
+ */
+export function upsertMonthlyCashFlow(db: Database, months: MonthlyCashFlowMonth[]): number {
+  const rows = months.flatMap((m) =>
+    m.rows.map((r) => ({ month: m.month, rowName: r.name, kind: r.kind, amount: r.amount })),
+  );
+  if (rows.length === 0) return 0;
+  const ts = nowIso();
+  db.transaction((tx) => {
+    for (const r of rows) {
+      tx
+        .insert(cashFlowMonthly)
+        .values({ ...r, createdAt: ts, updatedAt: ts })
+        .onConflictDoUpdate({
+          target: [cashFlowMonthly.month, cashFlowMonthly.rowName],
+          set: { kind: r.kind, amount: r.amount, updatedAt: ts },
+        })
+        .run();
+    }
+  });
+  return rows.length;
 }
 
 /**

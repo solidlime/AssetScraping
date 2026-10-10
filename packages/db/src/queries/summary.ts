@@ -308,6 +308,66 @@ export async function getDeduplicatedTransferExpense(
   return monthlyTotals;
 }
 
+/**
+ * cash_flow_monthly の合計行のみから月次収支を返す（month → { income, expense }）。
+ *
+ * 二重計上の罠: `収入` は `収入合計` と同額のカテゴリ行。合計行（`収入合計`/`支出合計`）のみを使う。
+ * 行が無ければ空 Map（呼び出し側は transactions ベースにフォールバックする）。
+ */
+export function getMonthlyCashFlowTotals(
+  db: Db = getDb(),
+): Map<string, { income: number; expense: number }> {
+  const rows = db
+    .select({
+      month: schema.cashFlowMonthly.month,
+      rowName: schema.cashFlowMonthly.rowName,
+      amount: schema.cashFlowMonthly.amount,
+    })
+    .from(schema.cashFlowMonthly)
+    .where(
+      or(
+        and(eq(schema.cashFlowMonthly.kind, "income"), eq(schema.cashFlowMonthly.rowName, "収入合計")),
+        and(
+          eq(schema.cashFlowMonthly.kind, "expense"),
+          eq(schema.cashFlowMonthly.rowName, "支出合計"),
+        ),
+      ),
+    )
+    .all();
+
+  const map = new Map<string, { income: number; expense: number }>();
+  for (const r of rows) {
+    const cur = map.get(r.month) ?? { income: 0, expense: 0 };
+    if (r.rowName === "収入合計") cur.income = r.amount;
+    else cur.expense = r.amount;
+    map.set(r.month, cur);
+  }
+  return map;
+}
+
+/**
+ * cash_flow_monthly の支出カテゴリ行（month, category, amount）を返す。
+ * `支出合計`（合計行）と `収支合計`（balance）は除く（カテゴリ別内訳には使わない）。
+ */
+export function getMonthlyCashFlowCategories(
+  db: Db = getDb(),
+): Array<{ month: string; category: string; amount: number }> {
+  return db
+    .select({
+      month: schema.cashFlowMonthly.month,
+      category: schema.cashFlowMonthly.rowName,
+      amount: schema.cashFlowMonthly.amount,
+    })
+    .from(schema.cashFlowMonthly)
+    .where(
+      and(
+        eq(schema.cashFlowMonthly.kind, "expense"),
+        notInArray(schema.cashFlowMonthly.rowName, ["支出合計", "収支合計"]),
+      ),
+    )
+    .all();
+}
+
 // Get the latest monthly summary (dynamically calculated from transactions, filtered by group)
 export async function getLatestMonthlySummary(groupIdParam?: string, db: Db = getDb()) {
   const groupId = await resolveGroupId(db, groupIdParam);
@@ -331,7 +391,10 @@ export async function getMonthlySummaries(
   const accountIds = await getAccountIdsForGroup(db, groupId);
   if (accountIds.length === 0) return [];
 
-  // 最古の月を取得
+  // /cf/monthly の月×行（合計行のみ参照する。カテゴリ行は使わない）
+  const cfMonths = await getMonthlyCashFlowTotals(db);
+
+  // 最古の月を取得（transactions と cash_flow_monthly の古い方）
   const oldestResult = await db
     .select({
       month: sql<string>`MIN(substr(${schema.transactions.date}, 1, 7))`.as("month"),
@@ -340,11 +403,16 @@ export async function getMonthlySummaries(
     .where(inArray(schema.transactions.accountId, accountIds))
     .get();
 
-  if (!oldestResult?.month) return [];
+  const oldestCf = [...cfMonths.keys()].sort()[0];
+  const oldestMonth =
+    oldestResult?.month && oldestCf
+      ? [oldestResult.month, oldestCf].sort()[0]
+      : (oldestResult?.month ?? oldestCf);
+  if (!oldestMonth) return [];
 
-  // 最古の月から現在月までの全ての月を生成
+  // 最古の月から現在月までの全ても月を生成
   const currentMonth = getJstYearMonthKey();
-  const allMonths = generateMonthRange(oldestResult.month, currentMonth);
+  const allMonths = generateMonthRange(oldestMonth, currentMonth);
 
   // 通常の収入/支出を集計
   const regularResults = await db
@@ -378,8 +446,11 @@ export async function getMonthlySummaries(
     const data = resultMap.get(month) || { regularIncome: 0, totalExpense: 0 };
     const transferIncome = transferIncomeMap.get(month) || 0;
     const transferExpense = transferExpenseMap.get(month) || 0;
-    const totalIncome = data.regularIncome + transferIncome;
-    const totalExpense = data.totalExpense + transferExpense;
+    // 優先規則（確定）: 当月は transactions 優先（/cf が当月分のみで楽天イチバ等の未確定分を含む）、
+    // 過去月は cash_flow_monthly 優先（明細が存在しないため唯一のソース）。
+    const cf = month === currentMonth ? undefined : cfMonths.get(month);
+    const totalIncome = cf ? cf.income : data.regularIncome + transferIncome;
+    const totalExpense = cf ? cf.expense : data.totalExpense + transferExpense;
     return {
       month,
       totalIncome,
