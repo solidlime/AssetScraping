@@ -9,7 +9,7 @@ import readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { chromium } from "playwright";
 import type { Page } from "playwright";
-import { AUTH_STATE_PATH } from "./auth.js";
+import { AUTH_STATE_PATH, loadCrawlerCredential } from "./auth.js";
 import { SSNB_URLS } from "@asset-scraping/shared";
 
 /** 2FA 画面かどうか */
@@ -28,12 +28,12 @@ async function completeTwoFactor(page: Page, rl: readline.Interface): Promise<vo
 }
 
 async function main(): Promise<void> {
-  const loginId = process.env.SSNB_LOGIN_ID;
-  const password = process.env.SSNB_PASSWORD;
-  if (!loginId || !password) {
-    console.error("SSNB_LOGIN_ID / SSNB_PASSWORD が未設定です。");
+  const credential = loadCrawlerCredential();
+  if (!credential) {
+    console.error("ssnb の認証情報が未設定です。設定タブで登録するか、SSNB_LOGIN_ID / SSNB_PASSWORD を設定してください。");
     process.exit(1);
   }
+  const { loginId, password } = credential;
 
   // CI/コンテナ内では X server が無いので headless で起動（HEADLESS=0 で上書き可）
   const headed = process.env.HEADLESS === "0";

@@ -8,8 +8,9 @@
 import { mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { resetOtp, waitForOtpCode } from "./otp.js";
 import { SSNB_URLS } from "@asset-scraping/shared";
+import { resetOtp, waitForOtpCode } from "./otp.js";
+import { createDb, getCrawlerCredential, resolveDbPath, type Database } from "@asset-scraping/db";
 
 export const AUTH_STATE_PATH =
   process.env.AUTH_STATE_PATH ?? "/data/auth-state.json";
@@ -36,13 +37,27 @@ export class TwoFactorRequiredError extends Error {
 }
 
 export class LoginRequiredError extends Error {
-  constructor(message = "ssnb のログインに失敗しました。認証情報 (SSNB_LOGIN_ID / SSNB_PASSWORD) とセレクタを確認してください。") {
+  constructor(message = "ssnb のログインに失敗しました。認証情報 (設定タブ / SSNB_LOGIN_ID・SSNB_PASSWORD) とセレクタを確認してください。") {
     super(message);
     this.name = "LoginRequiredError";
   }
 }
 
-/** 2FA 画面の OTP 入力欄（本家 SELECTORS.mfidOtpInput 相当 + ssnb 実測値） */
+let credentialDb: Database | null = null;
+
+/**
+ * ssnb 認証情報を解決する: DB 設定 (app_settings) を優先し、無ければ
+ * env (SSNB_LOGIN_ID / SSNB_PASSWORD) にフォールバック。どちらも無ければ null。
+ */
+export function loadCrawlerCredential(): { loginId: string; password: string } | null {
+  if (!credentialDb) credentialDb = createDb({ path: resolveDbPath() });
+  return getCrawlerCredential(credentialDb, {
+    loginId: process.env.SSNB_LOGIN_ID,
+    password: process.env.SSNB_PASSWORD,
+  });
+}
+
+/** 2FA 画面かつ OTP 入力欄が表示されているか（本家 SELECTORS.mfidOtpInput 相当 + ssnb 実測値） */
 export const OTP_INPUT_SELECTOR = [
   'input[autocomplete="one-time-code"]',
   'input[name*="otp"]',
@@ -164,11 +179,13 @@ async function fillCredentials(page: Page, loginId: string, password: string): P
  * - 2FA 要求 → TwoFactorRequiredError で停止
  */
 export async function getSession(headless = true): Promise<Session> {
-  const loginId = process.env.SSNB_LOGIN_ID;
-  const password = process.env.SSNB_PASSWORD;
-  if (!loginId || !password) {
-    throw new Error("SSNB_LOGIN_ID / SSNB_PASSWORD が未設定です（.env を確認）。");
+  const credential = loadCrawlerCredential();
+  if (!credential) {
+    throw new Error(
+      "ssnb の認証情報が未設定です。設定タブで登録するか、SSNB_LOGIN_ID / SSNB_PASSWORD を設定してください。",
+    );
   }
+  const { loginId, password } = credential;
 
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({
@@ -203,13 +220,23 @@ export async function getSession(headless = true): Promise<Session> {
       throw new TwoFactorRequiredError();
     }
     await page.locator(OTP_INPUT_SELECTOR).first().fill(code);
-    const otpSubmit = page.locator(["#submitto", 'button:text-is("認証する")', 'button:text-is("Verify")', 'input[type="submit"]', 'button[type="submit"]'].join(", ")).first();
+    const otpSubmit = page
+      .locator(
+        [
+          "#submitto",
+          'button:text-is("認証する")',
+          'button:text-is("Verify")',
+          'input[type="submit"]',
+          'button[type="submit"]',
+        ].join(", "),
+      )
+      .first();
     if (await otpSubmit.count()) await otpSubmit.click();
     await page.waitForLoadState("domcontentloaded", { timeout: 30_000 });
     resetOtp();
   }
 
-  // OTP 入力欄が無くヒント文だけの画面向けフォールバック
+  // OTP 画面が出なかった場合のフォールバック（ヒント文案のみ）
   const bodyText = await page.locator("body").innerText().catch(() => "");
   if (page.url().includes("/users/sign_in") || containsTwoFactorHint(bodyText)) {
     if (containsTwoFactorHint(bodyText)) {

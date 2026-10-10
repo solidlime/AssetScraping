@@ -5,7 +5,7 @@
  * ログイン完了を検出したら storageState を /data/auth-state.json に保存して終了する。
  */
 import { chromium } from "playwright";
-import { AUTH_STATE_PATH } from "./auth.js";
+import { AUTH_STATE_PATH, loadCrawlerCredential } from "./auth.js";
 import { SSNB_URLS } from "@asset-scraping/shared";
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -16,12 +16,12 @@ function isLoggedIn(url: string): boolean {
 }
 
 async function main(): Promise<void> {
-  const loginId = process.env.SSNB_LOGIN_ID;
-  const password = process.env.SSNB_PASSWORD;
-  if (!loginId || !password) {
-    console.error("SSNB_LOGIN_ID / SSNB_PASSWORD が未設定です（.env を確認）。");
+  const credential = loadCrawlerCredential();
+  if (!credential) {
+    console.error("ssnb の認証情報が未設定です（設定タブまたは .env で登録）。\n");
     process.exit(1);
   }
+  const { loginId, password } = credential;
 
   console.log("noVNC 経由で Chromium を起動します。ホストから http://localhost:8767/vnc.html を開いてください。");
   const browser = await chromium.launch({
