@@ -553,3 +553,96 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
     expect(() => parseTransactions("<table><tr><th>日付</th></tr></table>", "acc-1")).toThrow(ScrapeParseError);
   });
 });
+
+describe("parseHoldings の同名別ポジション一意化（SBI証券の株式表/投信表 別建て）", () => {
+  const stockTable = (rows: string) => `
+    <table><thead><tr><th>銘柄コード</th><th>銘柄名</th><th>保有数</th><th>平均取得単価</th><th>現在値</th><th>評価額</th><th>前日比</th><th>評価損益</th><th>評価損益率</th><th>取得日</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+  const fundTable = (rows: string) => `
+    <table><thead><tr><th>銘柄名</th><th>保有数</th><th>平均取得単価</th><th>基準価額</th><th>評価額</th><th>前日比</th><th>評価損益</th><th>評価損益率</th><th>取得日</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+  // 実測 3 組（投信値, 株式値）
+  const rakutenFund = `<tr><td>楽天グループ</td><td>100</td><td>1,000</td><td>1,100</td><td>191,880円</td><td>0円</td><td>1,000円</td><td>1.0%</td><td></td></tr>`;
+  const rakutenStock = `<tr><td>127920</td><td>楽天グループ</td><td>7,800</td><td>500</td><td>600</td><td>127,920円</td><td>0円</td><td>100円</td><td>1.0%</td><td></td></tr>`;
+  const nfFund = `<tr><td>NF日経高配当50</td><td>20</td><td>2,000</td><td>2,100</td><td>104,190円</td><td>0円</td><td>1,000円</td><td>1.0%</td><td></td></tr>`;
+  const nfStock = `<tr><td>590410</td><td>NF日経高配当50</td><td>2,900</td><td>300</td><td>400</td><td>590,410円</td><td>0円</td><td>100円</td><td>1.0%</td><td></td></tr>`;
+  const vgFund = `<tr><td>バンガード 米国高配当株式ETF</td><td>30</td><td>3,000</td><td>3,100</td><td>3,741,956円</td><td>0円</td><td>1,000円</td><td>1.0%</td><td></td></tr>`;
+  const vgStock = `<tr><td>2993565</td><td>バンガード 米国高配当株式ETF</td><td>9,000</td><td>300</td><td>400</td><td>2,993,565円</td><td>0円</td><td>100円</td><td>1.0%</td><td></td></tr>`;
+  const collisionHtml = stockTable(rakutenStock + nfStock + vgStock) + fundTable(rakutenFund + nfFund + vgFund);
+
+  it("① 衝突あり: 3 組 6 行が別名で生存し合計が保存される", () => {
+    const holdings = parseHoldings(collisionHtml, "sbi-1", { category: "securities", accountName: "SBI証券" });
+    expect(holdings.map((h) => h.name)).toEqual([
+      "楽天グループ（株式）",
+      "NF日経高配当50（株式）",
+      "バンガード 米国高配当株式ETF（株式）",
+      "楽天グループ（投信）",
+      "NF日経高配当50（投信）",
+      "バンガード 米国高配当株式ETF（投信）",
+    ]);
+    expect(holdings.reduce((s, h) => s + h.value, 0)).toBe(
+      191880 + 127920 + 104190 + 590410 + 3741956 + 2993565,
+    );
+  });
+
+  it("② 非衝突の口座は名前を 1 バイトも変えない", () => {
+    const html = stockTable(
+      `<tr><td>1001</td><td>銘柄A</td><td>100</td><td>1,000</td><td>1,100</td><td>110,000円</td><td>0円</td><td>0円</td><td>0%</td><td></td></tr>`,
+    ) + fundTable(`<tr><td>ファンドB</td><td>10</td><td>1,000</td><td>1,100</td><td>11,000円</td><td>0円</td><td>0円</td><td>0%</td><td></td></tr>`);
+    expect(parseHoldings(html, "sbi-1", { category: "securities" }).map((h) => h.name)).toEqual([
+      "銘柄A",
+      "ファンドB",
+    ]);
+  });
+
+  it("③ 同一テーブル内の同名 2 行はマージせず両方残る", () => {
+    const html = stockTable(
+      rakutenStock +
+        `<tr><td>127921</td><td>楽天グループ</td><td>200</td><td>510</td><td>610</td><td>130,000円</td><td>0円</td><td>100円</td><td>1.0%</td><td></td></tr>`,
+    );
+    const holdings = parseHoldings(html, "sbi-1", { category: "securities" });
+    expect(holdings).toHaveLength(2);
+    expect(new Set(holdings.map((h) => h.name)).size).toBe(2);
+    expect(holdings.every((h) => h.name.startsWith("楽天グループ"))).toBe(true);
+    for (const h of holdings) expect(h.quantity).toBeGreaterThan(0);
+  });
+
+  it("⑤ 同一 HTML を 2 回 parse しても名前集合が完全一致する（決定性）", () => {
+    const a = parseHoldings(collisionHtml, "sbi-1", { category: "securities" }).map((h) => h.name);
+    const b = parseHoldings(collisionHtml, "sbi-1", { category: "securities" }).map((h) => h.name);
+    expect(b).toEqual(a);
+  });
+
+  it("④ 未知シグネチャ（基準価額も銘柄コードも無い）は序数フォールバックで一意化する", () => {
+    const html = `
+    <table><thead><tr><th>名称</th><th>残高</th></tr></thead><tbody>
+      <tr><td>債券X</td><td>1,000円</td></tr>
+      <tr><td>債券X</td><td>2,000円</td></tr>
+    </tbody></table>`;
+    const names = parseHoldings(html, "acc-1", { category: "other" }).map((h) => h.name);
+    expect(names).toEqual(["債券X（T1）", "債券X（T2）"]);
+  });
+
+  it("④b 生成名が既存名と衝突する場合はループでさらに接尾辞を足す", () => {
+    const html = stockTable(rakutenStock) + fundTable(
+      rakutenFund +
+        `<tr><td>楽天グループ（投信）</td><td>50</td><td>1,000</td><td>1,100</td><td>55,000円</td><td>0円</td><td>0円</td><td>0%</td><td></td></tr>`,
+    );
+    const names = parseHoldings(html, "sbi-1", { category: "securities" }).map((h) => h.name);
+    expect(new Set(names).size).toBe(names.length);
+    // 実在名「楽天グループ（投信）」はそのまま、衝突した投信行だけ別名になる
+    expect(names).toContain("楽天グループ（投信）");
+    expect(names).toContain("楽天グループ（株式）");
+    expect(names).toHaveLength(3);
+  });
+
+  it("④c 接尾辞の付与は estimateAssetCategory の後（接尾辞が資産分類に影響しない）", () => {
+    const holdings = parseHoldings(collisionHtml, "sbi-1", { category: "securities", accountName: "SBI証券" });
+    const fund = holdings.find((h) => h.name === "楽天グループ（投信）")!;
+    const stock = holdings.find((h) => h.name === "楽天グループ（株式）")!;
+    // category=securities かつ銘柄名に投信語が無いので、接尾辞が無ければ分類は 株式(現物) のまま。
+    // 接尾辞を分類前に付けると「楽天グループ（投信）」が投資信託へ誤分類される。
+    expect(fund.assetCategory).toBe("株式(現物)");
+    expect(stock.assetCategory).toBe("株式(現物)");
+  });
+});

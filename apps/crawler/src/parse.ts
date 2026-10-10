@@ -321,7 +321,7 @@ export function parseHoldings(
   const root = parse(html);
   const scrapedAt = new Date().toISOString();
 
-  const holdings: Holding[] = [];
+  const holdings: Array<Holding & { kindTag?: string }> = [];
   // テーブル跨ぎの重複排除用。ssnb の残高内訳は集約テーブル（種類・名称）と
   // 支店/カード内訳テーブル（名称）が併存し、同一金額が別名で 2 回現れる。
   // 先行テーブルの金額を集合に入れ、後発テーブルの同一金額行は二重計上とみなし skip する。
@@ -372,6 +372,7 @@ export function parseHoldings(
     if (aggregateIdx >= 0) candidates.splice(aggregateIdx, 1);
 
     const tableValues: number[] = [];
+    const kindTag = tableKindTag(headers);
     for (const c of candidates) {
       // 0 円は重複判定に使わない（価値のない空行を消さない）
       if (isDetailTable && c.value !== 0 && seenValuesFromEarlierTables.has(c.value)) continue;
@@ -384,12 +385,54 @@ export function parseHoldings(
         averagePrice: c.averagePrice,
         unrealizedGain: c.unrealizedGain,
         scrapedAt,
+        kindTag,
       });
       if (c.value !== 0) tableValues.push(c.value);
     }
     for (const value of tableValues) seenValuesFromEarlierTables.add(value);
   }
-  return holdings;
+  return disambiguateHoldingNames(holdings);
+}
+
+/**
+ * 保有資産テーブルの種別（名前衝突時の接尾辞）。列シグネチャ優先（実測 SBI証券: 株式表は
+ * 「銘柄コード」、投信表は「基準価額」）。未知のシグネチャ（将来の債券・FX 表）は undefined を
+ * 返し、呼び出し元が序数フォールバックする。名前には付けず、rename 時にだけ使う。
+ */
+function tableKindTag(headers: string[]): string | undefined {
+  if (headers.includes("銘柄コード")) return "株式";
+  if (headers.includes("基準価額")) return "投信";
+  return undefined;
+}
+
+/**
+ * 同名別ポジションの名前を種別接尾辞で一意化する（SBI証券は同一商品を株式表・投信表に別建てする）。
+ * DB は (account_id, name) unique index の onConflictDoUpdate で同名行を統合し、実測で
+ * 49 行 / 45,240,726 円 → 46 行 / 41,202,700 円 に欠損していた（差 4,038,026 円）。
+ * schema・migration・unique index には触らず、パーサ側の名前規約だけで一意化する。
+ *
+ * 接尾辞を付けるのは 1 スクレイプ（1 口座）内に同名が 2 件以上ある行だけで、非衝突行の名前は変えない。
+ * 呼び出し元が estimateAssetCategory を済ませた後に呼ぶ（「楽天グループ（投信）」等の接尾辞が
+ * 資産分類ヒューリスティックに拾われないようにする）。
+ */
+export function disambiguateHoldingNames(holdings: Array<Holding & { kindTag?: string }>): Holding[] {
+  const counts = new Map<string, number>();
+  for (const h of holdings) counts.set(h.name, (counts.get(h.name) ?? 0) + 1);
+  if (![...counts.values()].some((n) => n > 1)) return holdings;
+
+  const used = new Set(holdings.map((h) => h.name));
+  const seen = new Map<string, number>();
+  return holdings.map((h) => {
+    if ((counts.get(h.name) ?? 0) < 2) return h;
+    const ordinal = (seen.get(h.name) ?? 0) + 1;
+    seen.set(h.name, ordinal);
+    const tag = h.kindTag ?? `T${ordinal}`;
+    // 実在商品名が「〇〇（投信）」という形でも unique 違反で upsert が死なないようループで足す
+    let name = `${h.name}（${tag}）`;
+    for (let n = 2; used.has(name); n++) name = `${h.name}（${tag}）_${n}`;
+    used.add(name);
+    return { ...h, name };
+  });
 }
 
 // ---------------------------------------------------------------------------

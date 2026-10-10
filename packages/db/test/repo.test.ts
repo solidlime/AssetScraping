@@ -417,3 +417,85 @@ describe("dedupeLegacyTransactions（F3: 旧 externalId=null 行の突合）", (
     expect(all.every((t) => t.externalId !== null)).toBe(true);
   });
 });
+
+describe("同名別ポジションの一意化と upsert/prune 連鎖（SBI証券 49行 / 45,240,726円）", () => {
+  const mk = (name: string, value: number, quantity = 0, accountId = "sbi-1") => ({
+    accountId,
+    name,
+    quantity,
+    value,
+    averagePrice: null,
+    unrealizedGain: null,
+    scrapedAt: "2026-02-14T06:30:00.000Z",
+  });
+
+  it("④ 旧名3行（統合済み）→ 一意化済みパーサ出力の upsert → prune で合計 45,240,726 円に収束する", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "sbi-1", name: "SBI証券", institution: "SBI証券", category: "securities" });
+
+    // 旧世代: 同名が onConflictDoUpdate で統合され、投信側の値だけが残っている状態
+    upsertHoldings(db, [
+      mk("楽天グループ", 191880),
+      mk("NF日経高配当50", 104190),
+      mk("バンガード 米国高配当株式ETF", 3741956),
+    ]);
+    expect(getHoldings(db, "sbi-1")).toHaveLength(3);
+    expect(getHoldings(db, "sbi-1").reduce((s, h) => s + h.value, 0)).toBe(4038026);
+
+    // 実測 SBI証券の 49 行を再現（3 組の同名 × 2 + 43 行の非衝突銘柄）
+    const collisions = [
+      mk("楽天グループ（株式）", 127920, 7800),
+      mk("楽天グループ（投信）", 191880, 100),
+      mk("NF日経高配当50（株式）", 590410, 2900),
+      mk("NF日経高配当50（投信）", 104190, 20),
+      mk("バンガード 米国高配当株式ETF（株式）", 2993565, 9000),
+      mk("バンガード 米国高配当株式ETF（投信）", 3741956, 30),
+    ];
+    // 43 行の非衝突銘柄（合計 37,490,805 円になるよう調整）
+    const others = Array.from({ length: 43 }, (_, i) => mk(`銘柄${i + 1}`, i < 42 ? 871880 : 871845, i + 1));
+    const rows = [...collisions, ...others];
+    expect(rows).toHaveLength(49);
+
+    upsertHoldings(db, rows);
+    const removed = pruneHoldingsByName(db, "sbi-1", rows.map((r) => r.name));
+
+    expect(removed).toBe(3);
+    const after = getHoldings(db, "sbi-1");
+    expect(after).toHaveLength(49);
+    const expected =
+      collisions.reduce((s, r) => s + r.value, 0) + others.reduce((s, r) => s + r.value, 0);
+    expect(expected).toBe(45240726);
+    expect(after.reduce((s, h) => s + h.value, 0)).toBe(45240726);
+  });
+
+  it("④b 同一テーブル内の同名 2 行を upsert すると現行 DB は黙ってマージする（挙動変化点の固定）", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "銀行", institution: "銀行", category: "bank" });
+    upsertHoldings(db, [mk("普通預金", 100, 1, "acc-1"), mk("普通預金", 200, 2, "acc-1")]);
+    const rows = getHoldings(db, "acc-1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ value: 200, quantity: 2 });
+  });
+
+  it("⑥ pruneHoldingsByName の比例ガード（toDelete > max(2, floor(existing/2)) で skip）は退行していない", () => {
+    const db = freshDb();
+    upsertAccount(db, { id: "acc-1", name: "銀行", institution: "銀行", category: "bank" });
+    upsertHoldings(db, Array.from({ length: 49 }, (_, i) => mk(`旧名${i + 1}`, i + 1, 0, "acc-1")));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // 49 行中 49 行が keep に無い（> max(2, floor(49/2))=24）→ prune せず 0
+      const removed = pruneHoldingsByName(db, "acc-1", ["新名1"]);
+      expect(removed).toBe(0);
+      expect(getHoldings(db, "acc-1")).toHaveLength(49);
+      const msg = String(warn.mock.calls[0]?.[0] ?? "");
+      expect(msg).toContain("existing=49");
+      expect(msg).toContain("toDelete=49");
+    } finally {
+      warn.mockRestore();
+    }
+    // 閾値内（49 行中 3 行だけ残す）なら削除する
+    const keep = Array.from({ length: 46 }, (_, i) => `旧名${i + 1}`);
+    expect(pruneHoldingsByName(db, "acc-1", keep)).toBe(3);
+    expect(getHoldings(db, "acc-1")).toHaveLength(46);
+  });
+});
