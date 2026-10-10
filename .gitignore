@@ -38,3 +38,6 @@ data/*.db
 
 # pi session artifacts
 .pi/
+
+# Screenshots (local, never commit actual data views)
+apps/web/screenshots/
