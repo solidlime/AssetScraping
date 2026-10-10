@@ -8,6 +8,7 @@
 import { mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { resetOtp, waitForOtpCode } from "./otp.js";
 import { SSNB_URLS } from "@asset-scraping/shared";
 
 export const AUTH_STATE_PATH =
@@ -28,7 +29,7 @@ const TWO_FACTOR_HINTS = [
 ];
 
 export class TwoFactorRequiredError extends Error {
-  constructor(message = "ssnb がメール確認（2FA）を要求しました。自動化できません。`npm run login` で対話ログインして storageState を更新してください。") {
+  constructor(message = "OTP 入力がタイムアウトしました。web UI から認証コードを入力して再実行してください。") {
     super(message);
     this.name = "TwoFactorRequiredError";
   }
@@ -40,6 +41,27 @@ export class LoginRequiredError extends Error {
     this.name = "LoginRequiredError";
   }
 }
+
+/** 2FA 画面の OTP 入力欄（本家 SELECTORS.mfidOtpInput 相当 + ssnb 実測値） */
+export const OTP_INPUT_SELECTOR = [
+  'input[autocomplete="one-time-code"]',
+  'input[name*="otp"]',
+  'input[name*="code"]',
+  'input[name="verification_code"]',
+  "#verification_code",
+].join(", ");
+
+export function isOtpInputVisible(page: Page): Promise<boolean> {
+  return page
+    .locator(OTP_INPUT_SELECTOR)
+    .first()
+    .waitFor({ state: "visible", timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+}
+
+/** OTP 待ち秒数（web UI からの入力を最大で待つ） */
+export const OTP_WAIT_TIMEOUT_MS = Number(process.env.OTP_WAIT_TIMEOUT_MS ?? 5 * 60 * 1000);
 
 export interface Session {
   context: BrowserContext;
@@ -167,8 +189,27 @@ export async function getSession(headless = true): Promise<Session> {
   // フルログイン
   await fillCredentials(page, loginId, password);
 
-  // 2FA（メール確認型）検知
+  // 2FA（OTP 入力画面）検知: OTP 待ち状態をステータスファイルに出し、
+  // web UI → crawler サーバ (POST /otp/submit) 経由で入力を受けてログイン続行する
   await sleep(2000);
+  if (await isOtpInputVisible(page)) {
+    console.log("[crawler] OTP 待ち: web UI から認証コードを入力してください");
+    resetOtp();
+    let code: string;
+    try {
+      code = await waitForOtpCode(OTP_WAIT_TIMEOUT_MS);
+    } catch {
+      await browser.close();
+      throw new TwoFactorRequiredError();
+    }
+    await page.locator(OTP_INPUT_SELECTOR).first().fill(code);
+    const otpSubmit = page.locator(["#submitto", 'button:text-is("認証する")', 'button:text-is("Verify")', 'input[type="submit"]', 'button[type="submit"]'].join(", ")).first();
+    if (await otpSubmit.count()) await otpSubmit.click();
+    await page.waitForLoadState("domcontentloaded", { timeout: 30_000 });
+    resetOtp();
+  }
+
+  // OTP 入力欄が無くヒント文だけの画面向けフォールバック
   const bodyText = await page.locator("body").innerText().catch(() => "");
   if (page.url().includes("/users/sign_in") || containsTwoFactorHint(bodyText)) {
     if (containsTwoFactorHint(bodyText)) {
