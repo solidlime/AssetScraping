@@ -172,27 +172,33 @@ export function upsertAccount(db: Database, input: UpsertAccountInput): void {
 
 export function upsertAccountStatus(db: Database, input: AccountStatus): void {
   const ts = nowIso();
-  // 本家互換の派生列: status="ok" / lastUpdated=scrapedAt / totalAssets=balance。
-  // 本家準拠 queries は status/lastUpdated/totalAssets を参照するため。
+  // 本家互換の派生列: lastUpdated=scrapedAt / totalAssets=balance。
+  // 更新状態は shared AccountStatus.status（parseAccounts が /accounts の更新状態列から判定）を反映。
+  // 未指定（=検出不能・正常）は本家既定 "ok"。statusText は errorMessage 列に載せる。
+  const status = input.status ?? "ok";
+  const errorMessage = input.statusText ?? null;
+  const values = {
+    accountId: input.accountId,
+    balance: input.balance,
+    scrapedAt: input.scrapedAt,
+    status,
+    lastUpdated: input.scrapedAt,
+    totalAssets: Math.round(input.balance),
+    errorMessage,
+    createdAt: ts,
+    updatedAt: ts,
+  };
   db.insert(accountStatuses)
-    .values({
-      accountId: input.accountId,
-      balance: input.balance,
-      scrapedAt: input.scrapedAt,
-      status: "ok",
-      lastUpdated: input.scrapedAt,
-      totalAssets: Math.round(input.balance),
-      createdAt: ts,
-      updatedAt: ts,
-    })
+    .values(values)
     .onConflictDoUpdate({
       target: accountStatuses.accountId,
       set: {
         balance: input.balance,
         scrapedAt: input.scrapedAt,
-        status: "ok",
+        status,
         lastUpdated: input.scrapedAt,
         totalAssets: Math.round(input.balance),
+        errorMessage,
         updatedAt: ts,
       },
     })
