@@ -22,9 +22,9 @@ import {
   type Database,
 } from "@asset-scraping/db";
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
-import { getOtpStatus, submitOtpCode } from "./otp.js";
 import { TwoFactorRequiredError } from "./auth.js";
 import { nextOccurrenceJst } from "./scheduler.js";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
 const PORT = Number(process.env.PORT ?? 8766);
 /** 定期更新ループの tick 間隔（= 設定時刻の読み直し間隔） */
@@ -43,14 +43,16 @@ function getDb(): Database {
   return dbHandle;
 }
 
-/** POST ボディを読む（/otp/submit 用） */
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.setEncoding("utf8");
-    req.on("data", (c) => (data += c));
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
+/**
+ * server が唯一の常駐プロセスなので起動時にマイグレーションを適用する。
+ * （cron 用 index.ts は db:migrate 前提のまま。宿 main に誤って db 追加が生じても無害＝冪等）
+ */
+function ensureMigrations(db: Database): void {
+  migrate(db, {
+    migrationsFolder: new URL("../../../packages/db/drizzle", import.meta.url).pathname.replace(
+      /^\/([A-Za-z]:)/,
+      "$1",
+    ),
   });
 }
 
@@ -200,6 +202,7 @@ export function getSchedulerState(): { nextRunAt: number | null; running: boolea
 }
 
 export function startServer(port = PORT): void {
+  ensureMigrations(getDb());
   const server = createServer((req, res) => {
     void route(req, res);
   });
@@ -221,27 +224,6 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
   if (req.method === "PUT" && url === "/settings") {
     await handleSettingsPut(req, res);
-    return;
-  }
-  if (req.method === "GET" && url === "/otp/status") {
-    // 2FA OTP 待ち状態の外部可視化（ステータスファイルの内容をそのまま返す）
-    sendJson(res, 200, { ok: true, ...getOtpStatus() });
-    return;
-  }
-  if (req.method === "POST" && url === "/otp/submit") {
-    try {
-      const parsed = JSON.parse(await readBody(req)) as { code?: string };
-      const code = typeof parsed.code === "string" ? parsed.code : "";
-      if (!code) {
-        sendJson(res, 400, { ok: false, error: "code is required" });
-        return;
-      }
-      // 同プロセスの待ち手がいれば true（即時解決）。無ければステータスファイルに残す
-      const delivered = submitOtpCode(code);
-      sendJson(res, 200, { ok: true, delivered });
-    } catch {
-      sendJson(res, 400, { ok: false, error: "invalid JSON body" });
-    }
     return;
   }
   if (req.method === "GET" && url === "/health") {
