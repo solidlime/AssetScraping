@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
 import { RefreshButton } from "../../components/RefreshButton";
+import { OtpForm } from "../../components/settings/otp-form.client";
 import { SettingsForm } from "../../components/settings/settings-form.client";
 import { Card, CardContent } from "../../components/ui/card";
 
@@ -12,6 +13,7 @@ export default function SettingsPage() {
   return (
     <PageLayout title="設定" options={<RefreshButton />}>
       <div className="space-y-6">
+        <OtpForm />
         <Card>
           <CardContent className="pt-6">
             <SettingsForm />
