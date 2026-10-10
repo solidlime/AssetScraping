@@ -7,9 +7,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  getAccountAlerts,
   getAllAccountStatuses,
   getAllAccounts,
   getAssetHistory,
+  getFinancialMetrics,
   getHoldings,
   getMonthlySummary,
   getTransactions,
@@ -80,6 +82,22 @@ export function createMcpServer(): McpServer {
       months: z.number().int().min(1).max(60).default(12).describe("直近 N ヶ月"),
     },
     ({ months }) => dbTool((db) => getMonthlySummary(db, { months })),
+  );
+
+  server.tool(
+    "get_account_alerts",
+    "口座警告（低残高・異常ステータス）を取得する",
+    {
+      threshold: z.number().int().min(0).optional().describe("低残高しきい値（円）。省略時は DB 設定"),
+    },
+    ({ threshold }) => dbTool((db) => getAccountAlerts(db, { threshold })),
+  );
+
+  server.tool(
+    "get_financial_metrics",
+    "財務メトリクス（貯蓄・投資・支出・成長・残高・負債・健全性スコア）を取得する",
+    {},
+    () => dbTool((db) => getFinancialMetrics(undefined, db)),
   );
 
   return server;
