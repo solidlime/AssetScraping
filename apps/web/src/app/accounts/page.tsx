@@ -1,4 +1,4 @@
-import { getAccountsGroupedByCategory } from "@asset-scraping/db";
+import { getAccountAlerts, getAccountsGroupedByCategory, getDb } from "@asset-scraping/db";
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
 import { Badge } from "../../components/ui/badge";
@@ -19,6 +19,9 @@ export default async function AccountsPage() {
   const okCount = autoAccounts.filter((a) => a.status === "ok").length;
   const errorCount = autoAccounts.filter((a) => a.status === "error").length;
 
+  // 口座警告（低残高・異常ステータス）の件数バッジ（getAccountAlerts は現在残高ベース）
+  const alertCount = getAccountAlerts(getDb()).length;
+
   return (
     <PageLayout
       title="連携サービス一覧"
@@ -26,6 +29,9 @@ export default async function AccountsPage() {
         <>
           <Badge variant="success">正常: {okCount}件</Badge>
           <Badge variant="destructive">エラー: {errorCount}件</Badge>
+          {alertCount > 0 && (
+            <Badge variant="warning">警告: {alertCount}件</Badge>
+          )}
         </>
       }
     >
