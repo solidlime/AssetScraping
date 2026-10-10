@@ -40,8 +40,13 @@ export function todayJst(now: Date = new Date()): string {
  * 本家互換 holding_values の upsert（holdingId×snapshotId）。
  * crawler が scrape 後に呼び出し、holdings 現行値から評価額系派生列を算出する。
  * - amount: 評価額（holdings.value を円丸め）
- * - unitPrice / avgCostPrice: quantity>0 のとき value/quantity・平均取得単価
- * - unrealizedGain / unrealizedGainPct: avgCostPrice から（本家準拠）
+ * - unitPrice / avgCostPrice: quantity>0 のとき value/quantity・平均取得単価（表示用。算出には使わない）
+ * - unrealizedGain / unrealizedGainPct: crawler がページから取得した値をそのまま保存（本家準拠）。
+ *   **`(評価額/数量 − 平均取得単価) × 数量` で再計算してはならない**:
+ *   投信の平均取得単価は 1万口あたり、米国株は現地通貨建てのため、単位が一致せず桁が壊れる
+ *   （実測: eMAXIS Slim 全世界株式 27,021×81,789 = 22億円。正しくは ÷10,000 で 221,001円）。
+ *   取得価額は `評価額 − 含み損益` で算出できる（実データ全行で一致）。
+ *   crawler が unrealizedGain を取得できなかった場合のみ avgCostPrice から算出する。
  * - dailyChange: 前日 holding_values（同 holding の直近別日付 snapshot）との差分。初日は null
  * snapshot（当日分）が無い holding は skip する（戻り値は書き込み件数）。
  */
@@ -98,13 +103,20 @@ export function upsertHoldingValues(
 
       const unitPrice = h.quantity > 0 ? h.value / h.quantity : null;
       const avgCostPrice = h.averagePrice;
+      // 取得価額 = 評価額 − 含み損益。crawler が取得した値を第一に使い、
+      // 無い場合のみ平均取得単価から算出する（crawler 側の算出も出所を検証済み）。
+      const scrapedGain = h.unrealizedGain;
       const unrealizedGain =
-        avgCostPrice !== null && unitPrice !== null
+        scrapedGain ??
+        (avgCostPrice !== null && avgCostPrice > 0 && unitPrice !== null
           ? Math.round((unitPrice - avgCostPrice) * h.quantity)
-          : (h.unrealizedGain ?? null);
+          : null);
+      // 取得価額（含み損益の母数）。投信・外貨建て銘柄でも桁が壊れないよう
+      // 評価額と含み損益の差から求める。
+      const costBasis = unrealizedGain !== null ? amount - unrealizedGain : null;
       const unrealizedGainPct =
-        avgCostPrice !== null && avgCostPrice > 0 && unitPrice !== null
-          ? ((unitPrice - avgCostPrice) / avgCostPrice) * 100
+        unrealizedGain !== null && costBasis !== null && costBasis > 0
+          ? (unrealizedGain / costBasis) * 100
           : null;
 
       tx

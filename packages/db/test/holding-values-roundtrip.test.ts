@@ -63,7 +63,10 @@ describe("upsertHoldingValues roundtrip", () => {
       quantity: 12.345,
       unitPrice: HOLDING.value / HOLDING.quantity,
       avgCostPrice: 9000,
-      unrealizedGain: Math.round((HOLDING.value / HOLDING.quantity - 9000) * HOLDING.quantity),
+      // HOLDING は crawler 取得の含み損益が null のため、平均取得単価からのフォールバックで算出される。
+      // 取得価額の母数は「評価額 − 含み損益」。単価×数量は使わない（投信・外貨建てで桁が壊れる）
+      unrealizedGain: 12351,
+      unrealizedGainPct: (12351 / (123456 - 12351)) * 100,
     });
     // 初回実行は前日データが無いため dailyChange は null
     expect(rows[0]!.dailyChange).toBeNull();
@@ -118,6 +121,74 @@ describe("upsertHoldingValues roundtrip", () => {
     const row = db.select().from(schema.holdingValues).where(eq(schema.holdingValues.id, 1)).get();
     const unitPrice = HOLDING.value / HOLDING.quantity;
     expect(row!.unrealizedGainPct).toBeCloseTo(((unitPrice - 9000) / 9000) * 100, 6);
+  });
+
+  it("crawler が取得した unrealizedGain をそのまま保存し、単価×数量で再計算しない", () => {
+    const db = freshDb();
+    resetTestDb(db);
+    const date = todayJst();
+    seedAccountWithSnapshot(db, date, 123456);
+    upsertHoldings(db, [{ ...HOLDING, unrealizedGain: 12345 }]);
+
+    upsertHoldingValues(db, [{ ...HOLDING, unrealizedGain: 12345 }], date);
+
+    const row = db.select().from(schema.holdingValues).where(eq(schema.holdingValues.id, 1)).get();
+    expect(row!.unrealizedGain).toBe(12345);
+    expect(row!.unrealizedGainPct).toBeCloseTo((12345 / (123456 - 12345)) * 100, 6);
+  });
+
+  it("投信の平均取得単価が1万口あたりでも桁が壊れない（実データ回帰）", () => {
+    const db = freshDb();
+    resetTestDb(db);
+    const date = todayJst();
+    seedAccountWithSnapshot(db, date, 315991);
+    // 実測 NAS データ: eMAXIS Slim 全世界株式（オール・カントリー）
+    // 評価額 315,991 / 数量 81,789 / 平均取得単価 27,021（1万口あたり）/ 含み損益 94,989
+    const fund = {
+      accountId: "acc-1",
+      name: "eMAXIS Slim 全世界株式(オール・カントリー)",
+      quantity: 81789,
+      value: 315991,
+      averagePrice: 27021,
+      unrealizedGain: 94989,
+      scrapedAt: "2026-10-10T12:20:57.102Z",
+    };
+    upsertHoldings(db, [fund]);
+    upsertHoldingValues(db, [fund], date);
+
+    const row = db.select().from(schema.holdingValues).where(eq(schema.holdingValues.id, 1)).get();
+    expect(row!.unrealizedGain).toBe(94989);
+    expect(row!.unrealizedGainPct).toBeCloseTo((94989 / (315991 - 94989)) * 100, 6);
+    // 素朴な単価×数量だと 22億円になる
+    expect(Math.round(27021 * 81789)).toBeGreaterThan(2_000_000_000);
+  });
+
+  it("米国株の平均取得単価が現地通貨建てでも桁が壊れない（実データ回帰）", () => {
+    const db = freshDb();
+    resetTestDb(db);
+    const date = todayJst();
+    seedAccountWithSnapshot(db, date, 10233005);
+    // 実測 NAS データ: アドバンスト マイクロ デバイシズ
+    // 評価額 10,233,005 / 数量 100 / 平均取得単価 19.65（USD）/ 含み損益 9,921,671
+    const us = {
+      accountId: "acc-1",
+      name: "アドバンスト マイクロ デバイシズ",
+      quantity: 100,
+      value: 10233005,
+      averagePrice: 19.65,
+      unrealizedGain: 9921671,
+      scrapedAt: "2026-10-10T12:20:57.102Z",
+    };
+    upsertHoldings(db, [us]);
+    upsertHoldingValues(db, [us], date);
+
+    const row = db.select().from(schema.holdingValues).where(eq(schema.holdingValues.id, 1)).get();
+    expect(row!.unrealizedGain).toBe(9921671);
+    expect(row!.unrealizedGainPct).toBeCloseTo((9921671 / (10233005 - 9921671)) * 100, 6);
+    // 現地通貨建て単価をそのまま使うと +520663% に暴走する（回帰防止）
+    const naivePct = ((10233005 / 100 - 19.65) / 19.65) * 100;
+    expect(naivePct).toBeGreaterThan(500_000);
+    expect(row!.unrealizedGainPct!).toBeLessThan(10_000);
   });
 
   it("snapshot が無い口座の行は skip する", () => {
