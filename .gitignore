@@ -52,6 +52,8 @@ nul
 /.resp.txt
 /.servers_tools.json
 .tmp-otp/
+# 実データ（口座HTML・DBコピー）を含む調査スクラッチ
+.tmp-*/
 
 # Screenshots (local, never commit actual data views)
 apps/web/screenshots/
