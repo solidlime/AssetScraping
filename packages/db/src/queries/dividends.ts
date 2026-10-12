@@ -442,14 +442,18 @@ export async function getDividendForecast(
   }
 
   // --- 当月 ---------------------------------------------------------------
-  // 当月に ex-date がある銘柄は実イベント（confirmed）に、無い銘柄は月次見込みに算入。
+  // 当月に ex-date がある銘柄は実イベント（confirmed）に、無い銘柄は「当月の季節性見込み」に算入。
+  // 月割り平均（monthlyAmountJpy）は四半期払いでも毎月加算され過大になるため使わない。
+  // 手動設定（annualModeMonthlyTotal）は季節性情報が無いので月次均等のまま。
   const confirmedJpy = Math.round(confirmedByMonth.get(currentMonthKey) ?? 0);
   let estimatedJpy = annualModeMonthlyTotal;
   for (const row of yahooRows) {
     const hasThisMonth = row.events.some((e) => e.exDate.slice(0, 7) === currentMonthKey);
-    if (!hasThisMonth) estimatedJpy += row.monthlyAmountJpy;
+    if (!hasThisMonth) {
+      estimatedJpy += row.monthlyPerShare[currentMonthNum]! * row.quantity * row.fx;
+    }
   }
-  const totalJpy = confirmedJpy + estimatedJpy;
+  const totalJpy = confirmedJpy + Math.round(estimatedJpy);
 
   // --- 当年 / 昨年 ---------------------------------------------------------
   const confirmedYear = yahooRows.reduce((sum, row) => {

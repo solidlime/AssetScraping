@@ -217,12 +217,13 @@ describe("getDividendForecast", () => {
     expect(forecast.months[12]!.amountJpy).toBe(76_314); // KO 3月 24,174 + JEPQ 3月 52,140
     expect(forecast.months[12]!.confirmed).toBe(false);
 
-    // 当月: 実イベント = JEPQ 0.5 × 550 × 158 = 43,450。推定 = KO のみ（JEPQ は当月実績あり）
+    // 当月: 実イベント = JEPQ 0.5 × 550 × 158 = 43,450。
+    // 推定は KO のみだが、当月（2月）は KO の支払い月ではないため季節性見込み = 0。
     expect(forecast.currentMonth).toMatchObject({
       month: "2026-02",
       confirmedJpy: 43_450,
-      estimatedJpy: 8_058,
-      totalJpy: 51_508,
+      estimatedJpy: 0,
+      totalJpy: 43_450,
     });
 
     // 当年: 2026年実績 85,162 + 残り10ヶ月 × 月次見込み 49,770
@@ -430,6 +431,98 @@ describe("月別バケットの季節性", () => {
       estimatedJpy: 0,
       totalJpy: 23_700,
     });
+  });
+});
+
+describe("当月見込みの季節性（バグB）", () => {
+  const NOW_OCT = new Date("2026-10-15T06:30:00.000Z");
+
+  it("四半期払い銘柄は当月（10月）に加算されない", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "コカ-コーラ", {
+      quantity: 300,
+      value: 4_079_196,
+      code: "KO",
+    });
+    // KO は 3/6/9/12 月のみ配当（10月は入金なし）
+    for (const exDate of [
+      "2025-12-12",
+      "2026-03-13",
+      "2026-06-12",
+      "2026-09-11",
+    ]) {
+      seedEvent(db, "KO", exDate, 0.6, "USD");
+    }
+
+    const forecast = await getDividendForecast(db, { now: NOW_OCT });
+    const current = forecast.currentMonth;
+    expect(current.month).toBe("2026-10");
+    expect(current.confirmedJpy).toBe(0);
+    // 旧実装は月割り平均 0.2 × 300 × 158 = 9,480 を加算していた
+    expect(current.estimatedJpy).toBe(0);
+    expect(current.totalJpy).toBe(0);
+  });
+
+  it("毎月払い銘柄は当月イベント未取得でも季節性見込みで加算される", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "JPM NDAQ エクイティプレミア インカム ETF", {
+      quantity: 300,
+      value: 5_000_000,
+      code: "JEPQ",
+    });
+    // 同月10月の直近3回 0.4 / 0.5 / 0.6 → 見込み 0.5。2026-10 は未取得
+    seedEvent(db, "JEPQ", "2023-10-01", 0.4, "USD");
+    seedEvent(db, "JEPQ", "2024-10-01", 0.5, "USD");
+    seedEvent(db, "JEPQ", "2025-10-01", 0.6, "USD");
+
+    const forecast = await getDividendForecast(db, { now: NOW_OCT });
+    const current = forecast.currentMonth;
+    expect(current.confirmedJpy).toBe(0);
+    expect(current.estimatedJpy).toBe(23_700); // 0.5 × 300 × 158
+    expect(current.totalJpy).toBe(23_700);
+  });
+
+  it("当月に確定イベントがある銘柄は二重計上しない", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "コカ-コーラ", {
+      quantity: 300,
+      value: 4_079_196,
+      code: "KO",
+    });
+    // 当月イベントあり
+    seedEvent(db, "KO", "2026-10-01", 0.6, "USD");
+    seedEvent(db, "KO", "2026-09-11", 0.6, "USD");
+
+    const forecast = await getDividendForecast(db, { now: NOW_OCT });
+    const current = forecast.currentMonth;
+    expect(current.confirmedJpy).toBe(28_440); // 0.6 × 300 × 158
+    expect(current.estimatedJpy).toBe(0);
+    expect(current.totalJpy).toBe(28_440);
+  });
+
+  it("手動設定（annualDistributionPerUnit）は当月も月次均等で加算される", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedHolding(db, accountId, snapshotId, "投資信託", "iTrustインド株式", {
+      quantity: 97_680,
+      value: 212_571,
+      code: null,
+    });
+    db.insert(schema.dividendSymbols)
+      .values({ holdingName: "iTrustインド株式", annualDistributionPerUnit: 120 })
+      .run();
+
+    const forecast = await getDividendForecast(db, { now: NOW_OCT });
+    // round(120/10000×97680) = 1172 / 12 = 97.67 → 98
+    expect(forecast.currentMonth.confirmedJpy).toBe(0);
+    expect(forecast.currentMonth.estimatedJpy).toBe(98);
+    expect(forecast.currentMonth.totalJpy).toBe(98);
   });
 });
 
