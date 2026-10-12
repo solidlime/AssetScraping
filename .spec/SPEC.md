@@ -7,6 +7,15 @@
 - [x] F4: ダッシュボード web アプリ: Next.js standalone + Tailwind 4 + recharts（:8765）。サーバーコンポーネントから drizzle で直接読む。web UI に手動更新ボタン（crawler :8766 へ HTTP POST）
 - [x] F5: stdio MCP ツール: @modelcontextprotocol/sdk、read-only、`docker run -i --rm -v mfb-data:/data:ro mfb-mcp` で Claude Desktop 等から起動
 
+## 機能要件（追加: 配当・分配シミュレータ）
+- [ ] F6: `/dividends` 配当・分配シミュレータ。「今月いくら入る見込みか」「去年はいくらだったか」「今年はいくらになる見込みか」を提示し、予算計画に使えるようにする。**推定値**であることを明示し、実績ではない
+  - データ源は **MCP hub に依存しない自前 HTTP**。Yahoo Finance chart API（`query1.finance.yahoo.com/v8/finance/chart/{symbol}?events=div&range=3y&interval=1d`）で1株配当イベント（ex-date・金額）、`JPY=X` で為替を取得。API キー不要
+  - 実測済み: KO 8件(USD) / 9432.T 6件(JPY) / 8306.T 4件(JPY) / 4755.T 0件（楽天は無配＝正しい値）／為替 158.183／**NAS コンテナからの egress は HTTP 200 で確認済**
+  - ssnb に配当・分配の実績は無い前提（調査済: ナビ7本に配当画面なし、保有テーブルに配当列なし、証券口座の取引は未収集）。**実績ではなく推定のみ**
+  - 銘柄の特定: 株式は ssnb の `銘柄コード` 列 → `holdings.code`（4桁数字→`{code}.T`、英字→米国ティッカーそのまま）。投信・年金はコードが無いため `dividend_symbols` で手動解決し、**未解決銘柄は合計に算入せず「—」＋一覧で明示**（嘘の数字を出さない）
+  - 推定式: 株式 = 数量 × 直近12ヶ月の1株配当合計 × 為替。投信 = 1万口あたり分配金 ÷ 10000 × 口数（データ源が無いため手動設定・既定0）。年金 = 0（既定、手動上書き可）
+  - 月別割付は過去イベントの ex-date の月から支払月を推定。過去年は「現在の保有数」で近似する（**保有数の履歴が無い**ため。UI に明示）
+
 ## 非機能要件
 - パフォーマンス: cron 1日2回（6:30/15:30 JST, TZ=Asia/Tokyo）+ 手動更新。ページ取得間にスリープ（規約 13条(41)(43) 対策）
 - セキュリティ: 認証情報は .env / compose env_file でコンテナへ注入。storageState も volume 内に封入。MCP は read-only ヒント付き

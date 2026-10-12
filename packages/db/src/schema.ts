@@ -350,3 +350,57 @@ export const assetHistory = sqliteTable(
     index("asset_history_group_id_idx").on(t.groupId),
   ],
 );
+
+// ============================================================================
+// 配当・分配シミュレータ（F6）
+// データ源は Yahoo Finance chart API（crawler が自前 HTTP で取得。MCP hub 非依存）
+// ============================================================================
+
+/**
+ * 1株（/1口）あたりの配当・分配イベント。ex-date 基準。
+ * カバードコール ETF 等の毎月分配は金額が変動するため、
+ * 「利回り」ではなく実イベントの系列として保存する。
+ */
+export const dividendEvents = sqliteTable(
+  "dividend_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Yahoo シンボル（例: "KO" / "9432.T" / "JEPQ"） */
+    symbol: text("symbol").notNull(),
+    /** YYYY-MM-DD（権利落ち日。受取日ではない） */
+    exDate: text("ex_date").notNull(),
+    /** 1株あたり金額（currency 建て） */
+    amount: real("amount").notNull(),
+    currency: text("currency").notNull(),
+    fetchedAt: text("fetched_at").notNull(),
+  },
+  (t) => [uniqueIndex("dividend_events_symbol_ex_date_idx").on(t.symbol, t.exDate)],
+);
+
+/**
+ * 保有銘柄名 → 配当取得シンボルの解決表。
+ * 株式・国内 ETF は ssnb の銘柄コードから自動解決できるが、投信・年金・ラップは
+ * コードを持たないためここで手動解決する。`yahooSymbol` が null の行は「未解決」で、
+ * 合計に算入せず UI で明示する。
+ */
+export const dividendSymbols = sqliteTable("dividend_symbols", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** ssnb の銘柄名（重複サフィックス `_2` を除去した基底名） */
+  holdingName: text("holding_name").notNull().unique(),
+  yahooSymbol: text("yahoo_symbol"),
+  currency: text("currency"),
+  /** 投信・ラップ用: 1万口あたりの年間分配金（円）。手動入力。0 = 分配なし */
+  annualDistributionPerUnit: real("annual_distribution_per_unit"),
+  /** false で合計から除外（無分配ファンド・ラップ専用など） */
+  paysDistribution: integer("pays_distribution", { mode: "boolean" }).default(true),
+  note: text("note"),
+  updatedAt: text("updated_at"),
+});
+
+/** 為替レート（外貨建て配当の円換算用）。crawler が取得。 */
+export const fxRates = sqliteTable("fx_rates", {
+  /** 例: "USDJPY" */
+  pair: text("pair").primaryKey(),
+  rate: real("rate").notNull(),
+  fetchedAt: text("fetched_at").notNull(),
+});
