@@ -113,6 +113,47 @@ function sumEvents(
   return total;
 }
 
+/**
+ * 暦月ごとの「1株あたり将来見込み額」を、同じ暦月の直近3イベントの平均から求める。
+ * 例: KO の3月イベントが 0.48 / 0.51 / 0.53 なら 3月見込み = 0.5067。
+ * 該当暦月の実績が無ければ 0（四半期払い銘柄は支払い月以外 0 になる）。
+ * 戻り値は index 1〜12（index 0 は未使用）。
+ */
+function computeMonthlyPerShare(
+  events: Array<{ exDate: string; amount: number }>,
+): number[] {
+  const byCalendarMonth = new Map<number, number[]>();
+  for (const event of events) {
+    const month = Number(event.exDate.slice(5, 7));
+    const list = byCalendarMonth.get(month) ?? [];
+    list.push(event.amount);
+    byCalendarMonth.set(month, list);
+  }
+  const result = new Array<number>(13).fill(0);
+  for (const [month, amounts] of byCalendarMonth) {
+    const recent = amounts.slice(-3); // 同じ暦月の直近3回
+    result[month] = recent.reduce((sum, amount) => sum + amount, 0) / recent.length;
+  }
+  return result;
+}
+
+/**
+ * 指定した暦月(1〜12)の将来見込み額（円・未丸め）。
+ * Yahoo 銘柄は暦月ごとの季節性見込み、手動設定の投信・年金は毎月均等に積む
+ * （分配金の季節性情報が無いため月次均等と仮定する）。
+ */
+function futureMonthEstimate(
+  calendarMonth: number,
+  yahooRows: ResolvedYahooRow[],
+  annualModeMonthlyTotal: number,
+): number {
+  let total = annualModeMonthlyTotal;
+  for (const row of yahooRows) {
+    total += row.monthlyPerShare[calendarMonth]! * row.quantity * row.fx;
+  }
+  return total;
+}
+
 /** holdings の最新 holding_values を駆動するサブクエリ（口座別 snapshot 対応） */
 function latestHoldingValues(db: Db) {
   return db
@@ -182,6 +223,8 @@ interface ResolvedYahooRow {
   monthlyAmountJpy: number;
   annualAmountJpy: number;
   events: Array<{ exDate: string; amount: number }>;
+  /** 暦月ごとの1株あたり将来見込み額（index 1〜12、0 は未使用） */
+  monthlyPerShare: number[];
 }
 
 export async function getDividendForecast(
@@ -192,7 +235,6 @@ export async function getDividendForecast(
   const todayKey = getJstTodayIsoDate(now);
   const currentMonthKey = getJstYearMonthKey(now);
   const { year: currentYear, month: currentMonthNum } = getJstDateParts(now);
-  const todayParts = monthParts(currentMonthKey);
 
   // 直近12ヶ月 / 直近3ヶ月の境界
   const ttmCutoff = addDaysToIsoDateKey(todayKey, -365);
@@ -363,6 +405,7 @@ export async function getDividendForecast(
       monthlyAmountJpy,
       annualAmountJpy,
       events,
+      monthlyPerShare: computeMonthlyPerShare(events),
     });
   }
 
@@ -377,15 +420,20 @@ export async function getDividendForecast(
     }
   }
 
-  const allResolvedMonthlyTotal =
-    yahooRows.reduce((sum, row) => sum + row.monthlyAmountJpy, 0) + annualModeMonthlyTotal;
-
   const months: DividendMonthBucket[] = [];
   for (let offset = -11; offset <= 12; offset++) {
     const monthKey = shiftYearMonthKey(currentMonthKey, offset);
     if (offset > 0) {
-      // 未来月: 実イベントが無いため月次見込みを積む
-      months.push({ month: monthKey, amountJpy: allResolvedMonthlyTotal, confirmed: false });
+      // 未来月: 同じ暦月の過去実績から季節性を反映した見込みを積む
+      // （四半期払いなら支払い月のみ非ゼロ、毎月払いなら毎月ほぼ均等。
+      //   手動設定の投信・年金は季節性情報が無いため毎月均等 = annualModeMonthlyTotal）
+      months.push({
+        month: monthKey,
+        amountJpy: Math.round(
+          futureMonthEstimate(monthParts(monthKey).month, yahooRows, annualModeMonthlyTotal),
+        ),
+        confirmed: false,
+      });
     } else {
       months.push({
         month: monthKey,
@@ -410,8 +458,13 @@ export async function getDividendForecast(
     const yearSum = sumEvents(row.events, (d) => d.startsWith(`${currentYear}-`));
     return sum + yearSum * row.quantity * row.fx;
   }, 0);
-  const monthsAfterCurrent = 12 - currentMonthNum;
-  const thisYearJpy = Math.round(confirmedYear + monthsAfterCurrent * allResolvedMonthlyTotal);
+  // 当年: 実績 + 当年の残り月（当月の翌月〜12月）の暦月見込み。
+  // 当月は confirmedYear に実績として含まれるため、残り月は当月の翌月から数えて二重計上しない。
+  let remainingYearEstimate = 0;
+  for (let month = currentMonthNum + 1; month <= 12; month++) {
+    remainingYearEstimate += futureMonthEstimate(month, yahooRows, annualModeMonthlyTotal);
+  }
+  const thisYearJpy = Math.round(confirmedYear + remainingYearEstimate);
 
   // 昨年: 保有数量の履歴が無いため、昨年の実イベント合計に「現在の数量」を掛けた近似。
   const lastYearJpy = Math.round(
@@ -422,6 +475,11 @@ export async function getDividendForecast(
   );
 
   // --- 今後12ヶ月 / 未解決 -------------------------------------------------
+  // 整合性メモ: 今後12ヶ月バケット合計と next12MonthsJpy（TTM 年間額）は概ね一致するが、
+  // 完全一致しない場合がある:
+  //  - 手動設定（annualDistributionPerUnit）は月次均等按分のためバケット12ヶ月分 = 年間額で一致
+  //  - Yahoo 銘柄は「TTM 実績（直近365日）」と「暦月平均 × 12」が履歴不足・増配減配でずれる
+  //    （直近1年に同じ暦月が2回/0回入る、金額変動など）
   const next12MonthsJpy =
     yahooRows.reduce((sum, row) => sum + row.annualAmountJpy, 0) + annualModeAnnualTotal;
 
