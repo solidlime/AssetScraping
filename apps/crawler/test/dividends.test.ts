@@ -43,17 +43,24 @@ function dividendsBody(currency: string, divs: Record<string, number>): unknown 
 // ---------------------------------------------------------------------------
 
 describe("toYahooSymbol", () => {
-  it("4桁数字は .T 付き JPY、英字はそのまま USD", () => {
-    expect(toYahooSymbol("4755")).toEqual({ symbol: "4755.T", currency: "JPY" });
-    expect(toYahooSymbol("8306")).toEqual({ symbol: "8306.T", currency: "JPY" });
-    expect(toYahooSymbol("AMD")).toEqual({ symbol: "AMD", currency: "USD" });
-    expect(toYahooSymbol("JEPQ")).toEqual({ symbol: "JEPQ", currency: "USD" });
+  it.each([
+    ["7203", { symbol: "7203.T", currency: "JPY" }],
+    ["563A", { symbol: "563A.T", currency: "JPY" }],
+    ["408A", { symbol: "408A.T", currency: "JPY" }],
+    ["314A", { symbol: "314A.T", currency: "JPY" }],
+    ["AMD", { symbol: "AMD", currency: "USD" }],
+    ["JEPQ", { symbol: "JEPQ", currency: "USD" }],
+    ["BRK.B", { symbol: "BRK.B", currency: "USD" }],
+  ])("%s → 正しいシンボルと通貨", (input, expected) => {
+    expect(toYahooSymbol(input)).toEqual(expected);
   });
 
   it("解決できないコードは null", () => {
     expect(toYahooSymbol(null)).toBeNull();
     expect(toYahooSymbol("")).toBeNull();
+    expect(toYahooSymbol("  ")).toBeNull();
     expect(toYahooSymbol("12345")).toBeNull();
+    expect(toYahooSymbol("563a")).toBeNull();
     expect(toYahooSymbol("あいう")).toBeNull();
     expect(toYahooSymbol("12 34")).toBeNull();
   });

@@ -1,6 +1,24 @@
 /** ssnb.x.moneyforward.com の URL 定数 */
 export const SSNB_BASE_URL = "https://ssnb.x.moneyforward.com" as const;
 
+/** Yahoo シンボル解決結果（JPY = 東証、USD = 米国等） */
+export type YahooSymbolResolution = { symbol: string; currency: "JPY" | "USD" } | null;
+
+/**
+ * 銘柄コード → Yahoo シンボル（配当シミュレータの唯一の判定箇所）。
+ * - 4桁数字（`7203`）または 3桁数字+英大文字1字（`563A`/`408A`/`314A`）→ `${code}.T`（JPY）
+ *   ※東証の新形式コード。米国ティッカーは先頭が英字（AMD/KO/JEPQ）なので衝突しない
+ * - 英字始まり（`BRK.B`/`^N225` 等）→ そのまま（USD。大文字化・加工はしない）
+ * - それ以外（null / 空 / 5桁以上 / 小文字混じり / 日本語 等）→ null
+ */
+export function toYahooSymbol(code: string | null): YahooSymbolResolution {
+  if (!code) return null;
+  const t = code.trim();
+  if (/^\d{4}$/.test(t) || /^\d{3}[A-Z]$/.test(t)) return { symbol: `${t}.T`, currency: "JPY" };
+  if (/^[A-Za-z][A-Za-z0-9.\-^=]{0,11}$/.test(t)) return { symbol: t, currency: "USD" };
+  return null;
+}
+
 export const SSNB_URLS = {
   signIn: `${SSNB_BASE_URL}/users/sign_in`,
   /** ログイン後のトップ（総資産） */

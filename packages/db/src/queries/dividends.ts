@@ -6,6 +6,7 @@ import {
   getJstYearMonthKey,
   shiftYearMonthKey,
 } from "@asset-scraping/date-utils";
+import { toYahooSymbol } from "@asset-scraping/shared";
 import { schema, type Db } from "../index.ts";
 
 // ============================================================================
@@ -25,10 +26,6 @@ const REASON_OUT_OF_SCOPE = "対象外カテゴリ";
 const REASON_NO_DISTRIBUTION = "分配なし設定";
 const REASON_UNRESOLVED_SYMBOL = "シンボル未解決";
 const REASON_UNRESOLVED_FX = "為替レート未取得";
-const REASON_UNRESOLVED_CURRENCY = "通貨未解決";
-
-const FOUR_DIGIT_CODE = /^\d{4}$/;
-const TICKER_CODE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 
 export type DividendForecastRow = {
   holdingName: string; // 表示用の基底名（重複サフィックス除去後）
@@ -345,17 +342,18 @@ export async function getDividendForecast(
     }
 
     // 4. シンボル解決（dividend_symbols → holdings.code の順）
+    //    判定は @asset-scraping/shared の toYahooSymbol に集約（東証の英数字コード含む）
     let symbol: string | null = null;
     let currency: "USD" | "JPY" | null = null;
     if (mapping?.yahooSymbol) {
       symbol = mapping.yahooSymbol;
       currency = coerceCurrency(mapping.currency) ?? inferCurrency(symbol);
-    } else if (holding.code && FOUR_DIGIT_CODE.test(holding.code)) {
-      symbol = `${holding.code}.T`;
-      currency = "JPY";
-    } else if (holding.code && TICKER_CODE.test(holding.code)) {
-      symbol = holding.code;
-      currency = "USD";
+    } else if (holding.code) {
+      const resolved = toYahooSymbol(holding.code);
+      if (resolved) {
+        symbol = resolved.symbol;
+        currency = resolved.currency;
+      }
     }
 
     if (symbol === null || currency === null) {

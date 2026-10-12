@@ -321,6 +321,26 @@ describe("getDividendForecast", () => {
     expect(row.resolved).toBe(true);
     expect(row.yahooSymbol).toBe("VYM");
   });
+
+  it("東証の英数字コード（563A）を .T / JPY として解決する", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "GXナスDカバコ", {
+      quantity: 800,
+      value: 863_200,
+      code: "563A",
+    });
+    seedEvent(db, "563A.T", "2026-02-10", 14, "JPY");
+
+    const forecast = await getDividendForecast(db, { now: NOW_DATE });
+    const row = forecast.rows.find((r) => r.holdingName === "GXナスDカバコ")!;
+    expect(row.resolved).toBe(true);
+    expect(row.yahooSymbol).toBe("563A.T");
+    expect(row.currency).toBe("JPY");
+    expect(row.reason).toBeNull();
+  });
 });
 
 describe("月別バケットの季節性", () => {

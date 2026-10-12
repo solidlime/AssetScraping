@@ -17,6 +17,7 @@ import {
   holdings,
   type Db,
 } from "@asset-scraping/db";
+import { toYahooSymbol, type YahooSymbolResolution } from "@asset-scraping/shared";
 
 const YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart";
 const USER_AGENT = "Mozilla/5.0";
@@ -26,21 +27,9 @@ const TIMEOUT_MS = 15_000;
 // シンボル解決
 // ---------------------------------------------------------------------------
 
-export type YahooResolution = { symbol: string; currency: "JPY" | "USD" } | null;
-
-/**
- * 銘柄コード → Yahoo シンボル。
- * - 4桁数字 → `${code}.T`（JPY）
- * - 英字始まり → そのまま（USD。大文字化・加工はしない）
- * - それ以外（null / 空 / 5桁以上 / 日本語 等）→ null
- */
-export function toYahooSymbol(code: string | null): YahooResolution {
-  if (!code) return null;
-  const t = code.trim();
-  if (/^\d{4}$/.test(t)) return { symbol: `${t}.T`, currency: "JPY" };
-  if (/^[A-Za-z][A-Za-z0-9.\-^=]{0,11}$/.test(t)) return { symbol: t, currency: "USD" };
-  return null;
-}
+/** 後方互換: 解決ロジックは @asset-scraping/shared に集約（実装は toYahooSymbol を参照） */
+export { toYahooSymbol };
+export type YahooResolution = YahooSymbolResolution;
 
 // ---------------------------------------------------------------------------
 // Yahoo chart 取得
