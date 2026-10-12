@@ -74,6 +74,7 @@ export {
   getAssetHistory as getMfAssetHistory,
 } from "./queries/asset.ts";
 export * from "./queries/holding.ts";
+export * from "./queries/dividends.ts";
 export {
   getFinancialMetrics,
   calculateHealthScore,
