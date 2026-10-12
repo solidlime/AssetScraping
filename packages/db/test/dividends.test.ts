@@ -214,7 +214,7 @@ describe("getDividendForecast", () => {
     expect(forecast.months[11]!.amountJpy).toBe(43_450); // JEPQ 0.5 × 550 × 158
     expect(forecast.months[11]!.confirmed).toBe(true);
     expect(forecast.months[12]!.month).toBe("2026-03");
-    expect(forecast.months[12]!.amountJpy).toBe(49_770); // 8,058 + 41,712
+    expect(forecast.months[12]!.amountJpy).toBe(76_314); // KO 3月 24,174 + JEPQ 3月 52,140
     expect(forecast.months[12]!.confirmed).toBe(false);
 
     // 当月: 実イベント = JEPQ 0.5 × 550 × 158 = 43,450。推定 = KO のみ（JEPQ は当月実績あり）
@@ -226,7 +226,9 @@ describe("getDividendForecast", () => {
     });
 
     // 当年: 2026年実績 85,162 + 残り10ヶ月 × 月次見込み 49,770
-    expect(forecast.thisYearJpy).toBe(582_862);
+    // 当年: 実績 + 当年の残り月（3〜12月）の暦月見込み。
+    // 実績 2026-01/02 = 85,162、残り月 = KO 96,696 + JEPQ 488,378 = 585,074
+    expect(forecast.thisYearJpy).toBe(670_236);
     // 昨年: 2025年実績（現在数量で近似）= KO 96,696 + JEPQ 488,378
     expect(forecast.lastYearJpy).toBe(585_074);
   });
@@ -318,6 +320,96 @@ describe("getDividendForecast", () => {
     expect(row.code).toBe("VYM"); // 非 null を採用
     expect(row.resolved).toBe(true);
     expect(row.yahooSymbol).toBe("VYM");
+  });
+});
+
+describe("月別バケットの季節性", () => {
+  const JEPQ_NAME = "JPM NDAQ エクイティプレミア インカム ETF";
+  const MONTHS_12 = [
+    "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08",
+    "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02",
+  ];
+
+  it("四半期払い銘柄は支払い月のみ非ゼロになる（KO は 3/6/9/12 月）", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "コカ-コーラ", {
+      quantity: 300,
+      value: 4_079_196,
+      code: "KO",
+    });
+    // 3月は直近3回の平均 (0.48 + 0.51 + 0.53) / 3 = 0.50667
+    seedEvent(db, "KO", "2023-03-14", 0.48, "USD");
+    seedEvent(db, "KO", "2024-03-14", 0.51, "USD");
+    seedEvent(db, "KO", "2025-03-14", 0.53, "USD");
+    seedEvent(db, "KO", "2025-06-13", 0.6, "USD");
+    seedEvent(db, "KO", "2025-09-12", 0.62, "USD");
+    seedEvent(db, "KO", "2025-12-12", 0.64, "USD");
+
+    const forecast = await getDividendForecast(db, { now: NOW_DATE });
+    const future = forecast.months.filter((m) => m.month > "2026-02");
+    expect(future.map((m) => m.month)).toEqual([
+      "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08",
+      "2026-09", "2026-10", "2026-11", "2026-12", "2027-01", "2027-02",
+    ]);
+    // 支払い月のみ非ゼロ（qty 300 × fx 158）
+    expect(future.map((m) => m.amountJpy)).toEqual([
+      24_016, 0, 0, 28_440, 0, 0, 29_388, 0, 0, 30_336, 0, 0,
+    ]);
+    expect(future.every((m) => m.confirmed === false)).toBe(true);
+
+    // 整合性検算: 今後12ヶ月バケット合計 ≒ next12MonthsJpy（TTM 年間額）
+    const bucketSum = future.reduce((sum, m) => sum + m.amountJpy, 0);
+    expect(bucketSum).toBe(112_180);
+    expect(forecast.next12MonthsJpy).toBe(113_286);
+    expect(
+      Math.abs(bucketSum - forecast.next12MonthsJpy) / forecast.next12MonthsJpy,
+    ).toBeLessThan(0.05);
+  });
+
+  it("月次払い銘柄（JEPQ）は将来月が毎月ほぼ均等になる", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", JEPQ_NAME, {
+      quantity: 300,
+      value: 5_000_000,
+      code: "JEPQ",
+    });
+    // 毎月 0.5 を 12ヶ月分
+    for (const month of MONTHS_12) seedEvent(db, "JEPQ", `${month}-01`, 0.5, "USD");
+
+    const forecast = await getDividendForecast(db, { now: NOW_DATE });
+    const future = forecast.months.filter((m) => m.month > "2026-02");
+    // 各暦月見込み 0.5 × 300 × 158 = 23,700
+    expect(future.map((m) => m.amountJpy)).toEqual(Array(12).fill(23_700));
+    expect(future.every((m) => m.amountJpy > 0)).toBe(true);
+  });
+
+  it("thisYearJpy は季節性見込みを使っても当月を二重計上しない", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", JEPQ_NAME, {
+      quantity: 300,
+      value: 5_000_000,
+      code: "JEPQ",
+    });
+    for (const month of MONTHS_12) seedEvent(db, "JEPQ", `${month}-01`, 0.5, "USD");
+
+    const forecast = await getDividendForecast(db, { now: NOW_DATE });
+    // 当年実績 = 2026-01 + 2026-02 = 1.0 × 300 × 158 = 47,400
+    // 残り10ヶ月（3〜12月）見込み = 10 × 23,700 = 237,000
+    expect(forecast.thisYearJpy).toBe(284_400);
+    // 二重計上していれば 308,100 になる
+    expect(forecast.thisYearJpy).not.toBe(308_100);
+    // 当月は実績のみで estimated に加算しない
+    expect(forecast.currentMonth).toMatchObject({
+      confirmedJpy: 23_700,
+      estimatedJpy: 0,
+      totalJpy: 23_700,
+    });
   });
 });
 
