@@ -2,7 +2,7 @@ import { getMfTransactions } from "@asset-scraping/db";
 import { PieChart as PieChartIcon } from "lucide-react";
 import { EmptyState } from "../ui/empty-state";
 import { createBreakdowns, type BreakdownTransaction } from "./transaction-stats-utils";
-import { TransactionStatsClient } from "./transaction-stats.client";
+import { TransactionStatsClient } from "../charts/lazy-charts.client";
 
 interface TransactionStatsProps {
   year: string;

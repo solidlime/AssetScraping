@@ -1,7 +1,7 @@
 import { getMonthlySummaries } from "@asset-scraping/db";
 import { TrendingUp } from "lucide-react";
+import { MonthlyIncomeExpenseChartClient } from "../charts/lazy-charts.client";
 import { EmptyState } from "../ui/empty-state";
-import { MonthlyIncomeExpenseChartClient } from "./monthly-income-expense-chart.client";
 
 interface MonthlyIncomeExpenseChartProps {
   className?: string;

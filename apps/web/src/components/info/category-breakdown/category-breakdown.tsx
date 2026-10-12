@@ -2,7 +2,8 @@ import { getMonthlyCategoryTotals, getTransactionsByMonth } from "@asset-scrapin
 import { List } from "lucide-react";
 import { parseYearMonthKey } from "@asset-scraping/date-utils";
 import { EmptyState } from "../../ui/empty-state";
-import { CategoryBreakdownClient, type CategoryData } from "./category-breakdown.client";
+import { CategoryBreakdownClient } from "../../charts/lazy-charts.client";
+import { type CategoryData } from "./category-breakdown.client";
 
 interface CategoryBreakdownProps {
   month: string;

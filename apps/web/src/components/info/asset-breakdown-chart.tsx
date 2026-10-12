@@ -1,7 +1,7 @@
 import { getAssetBreakdownByCategory, getCategoryChangesForPeriod, getLatestTotalAssets, getLiabilityBreakdownByCategory } from "@asset-scraping/db";
 import { PieChart } from "lucide-react";
+import { AssetBreakdownChartClient } from "../charts/lazy-charts.client";
 import { EmptyState } from "../ui/empty-state";
-import { AssetBreakdownChartClient } from "./asset-breakdown-chart.client";
 
 interface AssetBreakdownChartProps {
   className?: string;

@@ -3,7 +3,8 @@ import { Landmark as LandmarkIcon, PiggyBank as PiggyBankIcon } from "lucide-rea
 import { sortByAmountDescending } from "../../lib/amount-order";
 import { Card, CardHeader, CardTitle } from "../ui/card";
 import { EmptyState } from "../ui/empty-state";
-import { type CategoryGroup, HoldingsTableClient, HoldingsTableTotal } from "./holdings-table.client";
+import { HoldingsTableClient } from "../charts/lazy-charts.client";
+import { type CategoryGroup, HoldingsTableTotal } from "./holdings-table.client";
 
 interface HoldingsTableProps {
   type: "asset" | "liability";

@@ -4,8 +4,8 @@ import {
   getLatestTotalAssets,
 } from "@asset-scraping/db";
 import { Scale } from "lucide-react";
+import { BalanceSheetChartClient } from "../charts/lazy-charts.client";
 import { EmptyState } from "../ui/empty-state";
-import { BalanceSheetChartClient } from "./balance-sheet-chart.client";
 
 interface BalanceSheetChartProps {
   className?: string;

@@ -1,7 +1,7 @@
 import { getAssetHistoryWithCategories } from "@asset-scraping/db";
 import { LineChart } from "lucide-react";
+import { AssetHistoryChartClient } from "../charts/lazy-charts.client";
 import { EmptyState } from "../ui/empty-state";
-import { AssetHistoryChartClient } from "./asset-history-chart.client";
 
 interface AssetHistoryChartProps {
   className?: string;

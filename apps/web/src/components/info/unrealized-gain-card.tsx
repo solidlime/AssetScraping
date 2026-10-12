@@ -1,7 +1,8 @@
 import { getHoldingsWithLatestValues } from "@asset-scraping/db";
 import { TrendingUp } from "lucide-react";
 import { EmptyState } from "../ui/empty-state";
-import { HoldingsFilterReset, UnrealizedGainCardClient } from "./unrealized-gain-card.client";
+import { UnrealizedGainCardClient } from "../charts/lazy-charts.client";
+import { HoldingsFilterReset } from "./unrealized-gain-card.client";
 
 interface UnrealizedGainCardProps {
   className?: string;

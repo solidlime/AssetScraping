@@ -1,13 +1,23 @@
 "use client";
 
 import { Calculator } from "lucide-react";
+import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import type { PortfolioContext, WithdrawalMode } from "./compound-simulator-types.ts";
-import { MonteCarloChart } from "./monte-carlo-chart";
-import { ProjectionChart } from "./projection-chart";
 import { SettingsPanel } from "./settings-panel";
 import { SummaryPanel } from "./summary-panel";
 import { useCompoundSimulator } from "./use-compound-simulator.ts";
+
+// recharts は Global.isSsr をモジュール読み込み時に一度だけ評価し、SSR とクライアントで
+// 初回レンダー出力が変わるため hydration mismatch (#418) になる。クライアント専用にする。
+const ProjectionChart = dynamic(() => import("./projection-chart").then((m) => m.ProjectionChart), {
+  ssr: false,
+  loading: () => <div style={{ height: 300 }} />,
+});
+const MonteCarloChart = dynamic(
+  () => import("./monte-carlo-chart").then((m) => m.MonteCarloChart),
+  { ssr: false, loading: () => <div style={{ height: 300 }} /> },
+);
 
 function envNum(value: string | undefined): number | undefined {
   if (value == null || value === "") return undefined;
