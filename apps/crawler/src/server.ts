@@ -25,6 +25,7 @@ import { runScrape, type RunScrapeOptions } from "./scrape.js";
 import { getOtpStatus, submitOtpCode } from "./otp.js";
 import { TwoFactorRequiredError } from "./auth.js";
 import { nextOccurrenceJst } from "./scheduler.js";
+import { syncDividends, upsertDividendSymbol, validateDividendMapping } from "./dividends.js";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
 const PORT = Number(process.env.PORT ?? 8766);
@@ -101,6 +102,20 @@ async function handleUpdate(res: ServerResponse): Promise<void> {
   const outcome = await execRunScrape("manual");
   const status = outcome.ok ? 200 : outcome.twoFactor ? 503 : outcome.error === "scrape is already running" ? 409 : 500;
   sendJson(res, status, outcome.ok ? { ok: true, stats: outcome.stats } : { ok: false, error: outcome.error });
+}
+
+/**
+ * POST /dividends/mapping の検証・保存。HTTP 層とテストの両方から呼ぶ。
+ * 200 = { ok: true, row }（保存後の行）、400 = { ok: false, error }。
+ */
+export function handleDividendMapping(
+  db: Database,
+  body: unknown,
+): { status: number; body: unknown } {
+  const validated = validateDividendMapping(body);
+  if (!validated.ok) return { status: 400, body: { ok: false, error: validated.error } };
+  const row = upsertDividendSymbol(db, validated.value);
+  return { status: 200, body: { ok: true, row } };
 }
 
 /** 設定タブ用ペイロード。パスワードはマスク（hasPassword のみ返す） */
@@ -236,6 +251,28 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
   if (req.method === "PUT" && url === "/settings") {
     await handleSettingsPut(req, res);
+    return;
+  }
+  if (req.method === "POST" && url === "/dividends/sync") {
+    // 手動トリガ。SyncResult をそのまま返す（部分失敗は errors に載る）
+    try {
+      const result = await syncDividends(getDb());
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (req.method === "POST" && url === "/dividends/mapping") {
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid JSON body" });
+      return;
+    }
+    const outcome = handleDividendMapping(getDb(), body);
+    sendJson(res, outcome.status, outcome.body);
     return;
   }
   if (req.method === "GET" && url === "/otp/status") {

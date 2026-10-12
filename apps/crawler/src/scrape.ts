@@ -39,6 +39,7 @@ import {
   parseMonthlyCashFlow,
   parseTransactions,
 } from "./parse.js";
+import { syncDividends } from "./dividends.js";
 
 export interface RunScrapeOptions {
   /**
@@ -105,6 +106,18 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
       );
       holdingsRows.push(...holdings);
       stats.holdingsUpserted += holdings.length;
+    }
+
+    // 2b) 配当・分配イベント取得（Yahoo Finance）。holdings.code が取り込まれた後に行う。
+    // 外部 API なのでエラーでもスクレイプ自体は成功扱いにし、警告ログだけ出す。
+    try {
+      const dividends = await syncDividends(db);
+      console.log(`[crawler] dividends synced: ${JSON.stringify(dividends)}`);
+    } catch (err) {
+      console.warn(
+        "[crawler] dividends sync failed:",
+        err instanceof Error ? err.message : err,
+      );
     }
 
     // 3) 資産推移（/bs/history）
