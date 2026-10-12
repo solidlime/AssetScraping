@@ -16,7 +16,7 @@
 - [ ] T012: db — テーブル追加 `dividend_events` / `dividend_symbols` / `fx_rates`（drizzle + マイグレーション + クエリ + テスト）
 - [ ] T013: crawler — `dividends.ts`: Yahoo chart API から1株配当イベントと為替を取得し保存（直列・間隔・1日1回。テストは HTTP モック）
 - [ ] T014: db — 推定ロジック（TTM・年間見込み・月別割付・去年/今年比較、未解決の除外）＋テスト
-- [ ] T015: web — `/dividends` ページ（今月の見込み／12ヶ月カレンダー／去年vs今年／銘柄別内訳／未解決一覧＋手動設定）
+- [x] T015: web — `/dividends` ページ（今月の見込み／12ヶ月カレンダー／去年vs今年／銘柄別内訳／未解決一覧＋手動設定）
 - [ ] T016: 検証 — typecheck・build・テスト・NAS 反映後の実データ確認とスクショ
 
 ## 優先度：中
