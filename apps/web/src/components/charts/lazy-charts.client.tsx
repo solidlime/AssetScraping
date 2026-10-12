@@ -46,6 +46,12 @@ export const TransactionStatsClient = dynamic(
   { ssr: false, loading: () => <div style={{ height: 280 }} /> },
 );
 
+export const DividendCalendarChartClient = dynamic(
+  () =>
+    import("../dividends/dividend-calendar.client").then((m) => m.DividendCalendarChartClient),
+  { ssr: false, loading: () => <div style={{ height: 350 }} /> },
+);
+
 export const CategoryBreakdownClient = dynamic(
   () =>
     import("../info/category-breakdown/category-breakdown.client").then(

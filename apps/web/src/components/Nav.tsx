@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, Landmark, Scale, ArrowLeftRight, Lightbulb, Calculator, Settings } from "lucide-react";
+import { LayoutDashboard, Landmark, Scale, ArrowLeftRight, Lightbulb, Calculator, HandCoins, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
@@ -12,6 +12,7 @@ export const NAV_ITEMS = [
   { title: "C/F", href: "/cf", icon: ArrowLeftRight },
   { title: "インサイト", href: "/insights", icon: Lightbulb },
   { title: "シミュレーター", href: "/simulator", icon: Calculator },
+  { title: "配当・分配", href: "/dividends", icon: HandCoins },
   { title: "設定", href: "/settings", icon: Settings },
 ] as const;
 
