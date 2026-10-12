@@ -65,6 +65,8 @@ export interface Holding {
   name: string;
   /** 本家資産カテゴリ語彙（預金・現金 / 株式(現物) / 投資信託 / …）。scraper 側推定 */
   assetCategory?: string;
+  /** 銘柄コード（株式のみ。投信・年金等は null）。配当シンボル解決に使う */
+  code?: string | null;
   /** 数量（口座種別により意味が変わる: 株数、口数、円） */
   quantity: number;
   /** 評価額（円） */

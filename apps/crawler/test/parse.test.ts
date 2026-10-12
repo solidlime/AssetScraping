@@ -703,3 +703,58 @@ describe("parseHoldings の同名別ポジション一意化（SBI証券の株�
     expect(stock.assetCategory).toBe("株式(現物)");
   });
 });
+
+describe("parseHoldings の銘柄コード取り込み（T011）", () => {
+  // 実測 SBI証券 株式テーブルの列構成: 銘柄コード / 銘柄名 / 保有数 / 平均取得単価 / 現在値 /
+  // 評価額 / 前日比 / 評価損益 / 評価損益率。投信テーブルにはコード列が無い。
+  const stockTable = (rows: string) => `
+    <table><thead><tr><th>銘柄コード</th><th>銘柄名</th><th>保有数</th><th>平均取得単価</th><th>現在値</th><th>評価額</th><th>前日比</th><th>評価損益</th><th>評価損益率</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+  const fundTable = (rows: string) => `
+    <table><thead><tr><th>銘柄名</th><th>保有数</th><th>平均取得単価</th><th>基準価額</th><th>評価額</th><th>前日比</th><th>評価損益</th><th>評価損益率</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+
+  it("株式表の「銘柄コード」列を code に取り込む（4桁数字・英字）", () => {
+    const html = stockTable(
+      `<tr><td>4755</td><td>楽天グループ</td><td>7,800</td><td>500</td><td>600</td><td>127,920円</td><td>0円</td><td>100円</td><td>1.0%</td></tr>` +
+        `<tr><td>5802</td><td>住友電工</td><td>100</td><td>2,000</td><td>2,100</td><td>210,000円</td><td>0円</td><td>100円</td><td>1.0%</td></tr>` +
+        `<tr><td>AMD</td><td>AMD</td><td>10</td><td>15,000</td><td>16,000</td><td>160,000円</td><td>0円</td><td>100円</td><td>1.0%</td></tr>`,
+    );
+    const holdings = parseHoldings(html, "sbi-1", { category: "securities", accountName: "SBI証券" });
+    const byName = new Map(holdings.map((h) => [h.name, h.code]));
+    expect(byName.get("楽天グループ")).toBe("4755");
+    expect(byName.get("住友電工")).toBe("5802");
+    // 英字コードはそのまま（大文字化・加工しない）
+    expect(byName.get("AMD")).toBe("AMD");
+  });
+
+  it("コード列のラベルゆれ（コード / ティッカー）を検出する", () => {
+    const coded = (label: string) =>
+      `<table><thead><tr><th>${label}</th><th>銘柄名</th><th>保有数</th><th>平均取得単価</th><th>現在値</th><th>評価額</th></tr></thead><tbody>` +
+      `<tr><td>9432</td><td>NTT</td><td>100</td><td>150</td><td>160</td><td>16,000円</td></tr></tbody></table>`;
+    expect(parseHoldings(coded("コード"), "a", { category: "securities" })[0]!.code).toBe("9432");
+    expect(parseHoldings(coded("ティッカー"), "a", { category: "securities" })[0]!.code).toBe("9432");
+  });
+
+  it("コード列が無い投信表・年金表は code=null（名前で後段解決する）", () => {
+    const html = fundTable(
+      `<tr><td>楽天グループ</td><td>100</td><td>1,000</td><td>1,100</td><td>191,880円</td><td>0円</td><td>1,000円</td><td>1.0%</td></tr>`,
+    );
+    expect(parseHoldings(html, "sbi-1", { category: "securities" })[0]!.code).toBeNull();
+  });
+
+  it("重複サフィックス処理（株式表/投信表の同名別建て）を通っても code が失われない", () => {
+    const html =
+      stockTable(
+        `<tr><td>4755</td><td>楽天グループ</td><td>7,800</td><td>500</td><td>600</td><td>127,920円</td><td>0円</td><td>100円</td><td>1.0%</td></tr>`,
+      ) +
+      fundTable(
+        `<tr><td>楽天グループ</td><td>100</td><td>1,000</td><td>1,100</td><td>191,880円</td><td>0円</td><td>1,000円</td><td>1.0%</td></tr>`,
+      );
+    const holdings = parseHoldings(html, "sbi-1", { category: "securities", accountName: "SBI証券" });
+    const stock = holdings.find((h) => h.name === "楽天グループ（株式）")!;
+    const fund = holdings.find((h) => h.name === "楽天グループ（投信）")!;
+    expect(stock.code).toBe("4755");
+    expect(fund.code).toBeNull();
+  });
+});

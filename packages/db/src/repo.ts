@@ -252,6 +252,7 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
         .values({
           accountId: h.accountId,
           name: h.name,
+          code: h.code ?? null,
           categoryId: h.assetCategory ? (categoryIdByName.get(h.assetCategory) ?? null) : null,
           quantity: h.quantity,
           value: h.value,
@@ -264,6 +265,7 @@ export function upsertHoldings(db: Database, rows: Holding[]): void {
         .onConflictDoUpdate({
           target: [holdings.accountId, holdings.name],
           set: {
+            code: h.code ?? null,
             categoryId: h.assetCategory ? (categoryIdByName.get(h.assetCategory) ?? null) : null,
             quantity: h.quantity,
             value: h.value,

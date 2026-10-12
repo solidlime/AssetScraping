@@ -194,6 +194,7 @@ interface HoldingsColumns {
   quantityIdx: number | null;
   averagePriceIdx: number | null;
   unrealizedGainIdx: number | null;
+  codeIdx: number | null;
 }
 
 const NONE: HoldingsColumns = {
@@ -202,6 +203,7 @@ const NONE: HoldingsColumns = {
   quantityIdx: null,
   averagePriceIdx: null,
   unrealizedGainIdx: null,
+  codeIdx: null,
 };
 
 /**
@@ -238,12 +240,16 @@ export function resolveHoldingsColumns(headers: string[]): HoldingsColumns {
   const avgCost = indexOf(["平均取得単価", "平均取得価格", "取得価額"]);
   // 評価損益: pns/eq 形・株式形で「含み損益」または「評価損益」の列
   const gain = indexOf(["含み損益", "評価損益"]);
+  // 銘柄コード（実測 SBI証券 株式表。投信・年金表には無い = null のまま）。
+  // ラベル表記ゆれ: 銘柄コード / コード / ティッカー
+  const code = indexOf(["銘柄コード", "コード", "ティッカー"]);
   return {
     nameIdx: name,
     valueIdx: value,
     quantityIdx: quantity >= 0 ? quantity : null,
     averagePriceIdx: avgCost >= 0 ? avgCost : null,
     unrealizedGainIdx: gain >= 0 ? gain : null,
+    codeIdx: code >= 0 ? code : null,
   };
 }
 
@@ -295,6 +301,16 @@ function parseQuantity(text: string): number | null {
   if (!m) return null;
   const n = Number(m[1]?.replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 銘柄コードセル（"4755" / "5802" / "AMD"）→ string。解釈不可・空は null。
+ * 数字始まりの英数字・.（例 1305.T 相当）および `^` `=` を許容する。
+ */
+function parseCode(text: string): string | null {
+  const t = text.trim();
+  if (!t) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9.\-^=]*$/.test(t) ? t : null;
 }
 
 /**
@@ -377,6 +393,7 @@ export function parseHoldings(
       value: number;
       averagePrice: number | null;
       unrealizedGain: number | null;
+      code: string | null;
     }> = [];
     for (const row of table.querySelectorAll("tr")) {
       const tds = row.querySelectorAll("td");
@@ -394,7 +411,8 @@ export function parseHoldings(
           : null;
       const unrealizedGain =
         cols.unrealizedGainIdx !== null ? parseYen(cellText(tds[cols.unrealizedGainIdx])) : null;
-      candidates.push({ name, quantity, value, averagePrice, unrealizedGain });
+      const code = cols.codeIdx !== null ? parseCode(cellText(tds[cols.codeIdx])) : null;
+      candidates.push({ name, quantity, value, averagePrice, unrealizedGain, code });
     }
 
     // 構造ベースの集約行除外（他行合計と一致する行）。名前 regex では拾えないため。
@@ -412,6 +430,7 @@ export function parseHoldings(
       holdings.push({
         accountId,
         name: c.name,
+        code: c.code,
         assetCategory: estimateAssetCategory(c.name, opts?.category, opts?.accountName),
         quantity: c.quantity,
         value: c.value,
