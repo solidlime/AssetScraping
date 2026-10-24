@@ -12,6 +12,8 @@ interface SettingsPayload {
   lowBalanceThreshold?: number;
   withdrawalAlertDays?: number;
   withdrawalAccountId?: string | null;
+  /** F7: カード別の引き落とし口座（未設定は null） */
+  cardWithdrawalLinks?: { cardAccountId: string; cardName: string; withdrawalAccountId: string | null }[];
   credential?: { loginId: string; hasPassword: boolean };
   error?: string;
 }
@@ -26,7 +28,14 @@ const NO_ACCOUNT = "none";
  * - クレカ引き落とし警告の日数 N と引き落とし口座（F7）
  * - ssnb 認証情報（パスワードはマスク表示・空欄なら既存値を保持）
  */
-export function SettingsForm({ withdrawalAccounts }: { withdrawalAccounts: { id: string; name: string }[] }) {
+export function SettingsForm({
+  withdrawalAccounts,
+  cards,
+}: {
+  withdrawalAccounts: { id: string; name: string }[];
+  /** カード行（カード別の引き落とし口座を設定する対象）。現在値は /api/settings から取るのでここでは id/name のみ */
+  cards: { id: string; name: string }[];
+}) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
@@ -34,6 +43,8 @@ export function SettingsForm({ withdrawalAccounts }: { withdrawalAccounts: { id:
   const [lowBalanceThreshold, setLowBalanceThreshold] = useState<number>(100_000);
   const [withdrawalAlertDays, setWithdrawalAlertDays] = useState<number>(7);
   const [withdrawalAccountId, setWithdrawalAccountId] = useState<string>(NO_ACCOUNT);
+  /** カードID → 引き落とし口座ID（未設定は NO_ACCOUNT） */
+  const [cardLinks, setCardLinks] = useState<Record<string, string>>({});
   const [loginId, setLoginId] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
   const [password, setPassword] = useState("");
@@ -57,6 +68,14 @@ export function SettingsForm({ withdrawalAccounts }: { withdrawalAccounts: { id:
             : 7,
         );
         setWithdrawalAccountId(body.withdrawalAccountId ?? NO_ACCOUNT);
+        setCardLinks(
+          Object.fromEntries(
+            (body.cardWithdrawalLinks ?? []).map((link) => [
+              link.cardAccountId,
+              link.withdrawalAccountId ?? NO_ACCOUNT,
+            ]),
+          ),
+        );
         setLoginId(body.credential?.loginId ?? "");
         setHasPassword(body.credential?.hasPassword ?? false);
       } else {
@@ -88,6 +107,16 @@ export function SettingsForm({ withdrawalAccounts }: { withdrawalAccounts: { id:
         if (typeof body.lowBalanceThreshold === "number") setLowBalanceThreshold(body.lowBalanceThreshold);
         if (typeof body.withdrawalAlertDays === "number") setWithdrawalAlertDays(body.withdrawalAlertDays);
         setWithdrawalAccountId(body.withdrawalAccountId ?? NO_ACCOUNT);
+        if (body.cardWithdrawalLinks) {
+          setCardLinks(
+            Object.fromEntries(
+              body.cardWithdrawalLinks.map((link) => [
+                link.cardAccountId,
+                link.withdrawalAccountId ?? NO_ACCOUNT,
+              ]),
+            ),
+          );
+        }
         if (body.credential) {
           setLoginId(body.credential.loginId);
           setHasPassword(body.credential.hasPassword);
@@ -196,9 +225,9 @@ export function SettingsForm({ withdrawalAccounts }: { withdrawalAccounts: { id:
       </FormField>
 
       <FormField
-        label="引き落とし口座"
+        label="引き落とし口座（既定）"
         htmlFor="withdrawal-account-id"
-        description="クレカの引き落とし予定額と残高を比べる銀行口座。未設定の場合、銀行口座が1つだけなら自動でそれを使い、複数なら警告しません。"
+        description="カードごとの個別指定（下の表）がない場合に使う既定の銀行口座。未設定の場合、銀行口座が1つだけなら自動でそれを使い、複数なら警告しません。"
       >
         <div className="flex items-center gap-2">
           <Select
@@ -224,10 +253,48 @@ export function SettingsForm({ withdrawalAccounts }: { withdrawalAccounts: { id:
               )
             }
           >
-            口座を保存
+            既定を保存
           </Button>
         </div>
       </FormField>
+
+      {cards.length > 0 && (
+        <FormField
+          label="カード別の引き落とし口座"
+          htmlFor="card-withdrawal-links"
+          description="カードごとに引き落とし口座を指定します。未設定のカードは上の既定値で判定します。1枚ずつ保存されます。"
+        >
+          <div className="space-y-2" id="card-withdrawal-links">
+            {cards.map((card) => (
+              <div key={card.id} className="flex flex-wrap items-center gap-2">
+                <span className="w-48 truncate text-sm text-foreground">{card.name}</span>
+                <Select
+                  aria-label={`${card.name} の引き落とし口座`}
+                  className="w-72"
+                  value={cardLinks[card.id] ?? NO_ACCOUNT}
+                  disabled={saving}
+                  onChange={(value) => setCardLinks((prev) => ({ ...prev, [card.id]: value }))}
+                  options={[{ value: NO_ACCOUNT, label: "未設定" }, ...withdrawalAccounts.map((a) => ({ value: a.id, label: a.name }))]}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => {
+                    const value = cardLinks[card.id] ?? NO_ACCOUNT;
+                    void save(
+                      { cardWithdrawalLinks: { [card.id]: value === NO_ACCOUNT ? null : value } },
+                      "カード別の引き落とし口座を保存しました",
+                    );
+                  }}
+                >
+                  保存
+                </Button>
+              </div>
+            ))}
+          </div>
+        </FormField>
+      )}
 
       <FormField
         label="ssnb ログイン ID"

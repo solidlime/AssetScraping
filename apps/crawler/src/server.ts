@@ -10,19 +10,27 @@
  * UI 変更が即反映される。到達判定は既存の純粋関数 nextOccurrenceJst (scheduler.ts) を使用。
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { eq } from "drizzle-orm";
 import {
+  accountStatuses,
+  accounts,
   createDb,
   getCrawlerCredential,
   getLowBalanceThreshold,
   getScheduledRefreshTime,
   getWithdrawalAccountId,
   getWithdrawalAlertDays,
+  isBankLikeAccount,
   resolveDbPath,
+  resolveCrawlerCredential,
   setCrawlerCredential,
   setLowBalanceThreshold,
   setScheduledRefreshTime,
   setWithdrawalAccountId,
   setWithdrawalAlertDays,
+  validateLowBalanceThreshold,
+  validateScheduleTime,
+  validateWithdrawalAlertDays,
   type Database,
 } from "@asset-scraping/db";
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
@@ -123,7 +131,7 @@ export function handleDividendMapping(
 }
 
 /** 設定タブ用ペイロード。パスワードはマスク（hasPassword のみ返す） */
-function settingsPayload(db: Database): Record<string, unknown> {
+export function settingsPayload(db: Database): Record<string, unknown> {
   const credential = getCrawlerCredential(db, {
     loginId: process.env.SSNB_LOGIN_ID,
     password: process.env.SSNB_PASSWORD,
@@ -134,33 +142,117 @@ function settingsPayload(db: Database): Record<string, unknown> {
     lowBalanceThreshold: getLowBalanceThreshold(db),
     withdrawalAlertDays: getWithdrawalAlertDays(db),
     withdrawalAccountId: getWithdrawalAccountId(db),
+    // F7: カード別の引き落とし口座（手動設定専用のためスクレイプ経路では書かない）
+    cardWithdrawalLinks: cardWithdrawalLinks(db),
     credential: credential
       ? { loginId: credential.loginId, hasPassword: true }
       : { loginId: "", hasPassword: false },
   };
 }
 
-function applySettingsUpdate(db: Database, body: Record<string, unknown>): void {
-  if (typeof body.scheduledRefreshTime === "string") {
-    setScheduledRefreshTime(db, body.scheduledRefreshTime);
+function cardWithdrawalLinks(
+  db: Database,
+): { cardAccountId: string; cardName: string; withdrawalAccountId: string | null }[] {
+  return db
+    .select({
+      cardAccountId: accounts.id,
+      cardName: accounts.name,
+      withdrawalAccountId: accounts.withdrawalAccountId,
+    })
+    .from(accounts)
+    .where(eq(accounts.category, "card"))
+    .all();
+}
+
+/**
+ * カード別の引き落とし口座の検証（書込を伴わない）。キー = カードの accountId、値 = 引き落とし口座 or null 解除。
+ * 未出現のキーは既存値を保持する。違反は throw して 400 経路に乗せる。
+ */
+function validateCardWithdrawalLinks(
+  db: Database,
+  raw: unknown,
+): { cardId: string; value: string | null }[] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("cardWithdrawalLinks はオブジェクトで指定してください");
   }
-  if (body.lowBalanceThreshold !== undefined) {
-    const n = Number(body.lowBalanceThreshold);
-    if (!Number.isFinite(n)) throw new Error("lowBalanceThreshold は数値で指定してください");
-    setLowBalanceThreshold(db, n);
+  const all = db.select().from(accounts).all();
+  const byId = new Map(all.map((a) => [a.id, a]));
+  // 予定額を持つ行（= カード扱いされる行）は引き落とし口座にできない（alerts.ts の isCardRow と同じ判定）
+  const scheduledById = new Map(
+    db
+      .select({ accountId: accountStatuses.accountId, amount: accountStatuses.scheduledWithdrawalAmount })
+      .from(accountStatuses)
+      .all()
+      .map((row) => [row.accountId, row.amount] as const),
+  );
+  const updates: { cardId: string; value: string | null }[] = [];
+  for (const [cardId, value] of Object.entries(raw as Record<string, unknown>)) {
+    const card = byId.get(cardId);
+    if (!card) throw new Error(`cardWithdrawalLinks: 口座が存在しない: ${cardId}`);
+    if (card.category !== "card") {
+      throw new Error(`cardWithdrawalLinks: カード以外は指定できません: ${cardId}`);
+    }
+    if (value !== null && typeof value !== "string") {
+      throw new Error("cardWithdrawalLinks の値は文字列か null で指定してください");
+    }
+    if (value === cardId) throw new Error("cardWithdrawalLinks: カード自身は指定できません");
+    if (value !== null) {
+      const account = byId.get(value);
+      if (!account) throw new Error(`cardWithdrawalLinks: 口座が存在しない: ${value}`);
+      // カード→カードの紐付けを拒否。予定額を持つ行も解決側でカード扱いされるので同様に拒否
+      if (!isBankLikeAccount(account) || scheduledById.get(value) != null) {
+        throw new Error(`cardWithdrawalLinks: 引き落とし口座にカードは指定できません: ${value}`);
+      }
+    }
+    updates.push({ cardId, value: value as string | null });
   }
-  if (body.withdrawalAlertDays !== undefined) {
-    const n = Number(body.withdrawalAlertDays);
-    if (!Number.isFinite(n)) throw new Error("withdrawalAlertDays は数値で指定してください");
-    setWithdrawalAlertDays(db, n);
-  }
+  return updates;
+}
+
+/** 検証済みの更新をまとめて書く（途中失敗時は 1 件も書かれない） */
+function applyCardWithdrawalLinks(db: Database, updates: { cardId: string; value: string | null }[]): void {
+  const ts = new Date().toISOString();
+  db.transaction((tx) => {
+    for (const { cardId, value } of updates) {
+      tx.update(accounts)
+        .set({ withdrawalAccountId: value, updatedAt: ts })
+        .where(eq(accounts.id, cardId))
+        .run();
+    }
+  });
+}
+
+/** 数値でない値を弾く（"abc" を NaN のまま後段に流さない） */
+function toFiniteNumber(value: unknown, field: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new Error(`${field} は数値で指定してください`);
+  return n;
+}
+
+export function applySettingsUpdate(db: Database, body: Record<string, unknown>): void {
+  // 1) 検証フェーズ: 全フィールドを先に検証する。
+  // 途中で throw しても先行フィールドが確定しないように、書込は一切行わない。
+  const scheduledRefreshTime =
+    typeof body.scheduledRefreshTime === "string" ? validateScheduleTime(body.scheduledRefreshTime) : undefined;
+  const lowBalanceThreshold =
+    body.lowBalanceThreshold === undefined
+      ? undefined
+      : validateLowBalanceThreshold(toFiniteNumber(body.lowBalanceThreshold, "lowBalanceThreshold"));
+  const withdrawalAlertDays =
+    body.withdrawalAlertDays === undefined
+      ? undefined
+      : validateWithdrawalAlertDays(toFiniteNumber(body.withdrawalAlertDays, "withdrawalAlertDays"));
+  let withdrawalAccountId: string | null | undefined;
   if (body.withdrawalAccountId !== undefined) {
     const id = body.withdrawalAccountId;
     if (id !== null && typeof id !== "string") {
       throw new Error("withdrawalAccountId は文字列か null で指定してください");
     }
-    setWithdrawalAccountId(db, id === null || id === "" ? null : id);
+    withdrawalAccountId = id === null || id === "" ? null : id;
   }
+  const cardUpdates =
+    body.cardWithdrawalLinks === undefined ? undefined : validateCardWithdrawalLinks(db, body.cardWithdrawalLinks);
+  let credential: { loginId: string; password: string } | undefined;
   if (body.credential !== undefined) {
     const cred = body.credential as Record<string, unknown> | null;
     if (cred === null || typeof cred.loginId !== "string" || cred.loginId.length === 0) {
@@ -171,8 +263,16 @@ function applySettingsUpdate(db: Database, body: Record<string, unknown>): void 
       throw new Error("credential.password は文字列で指定してください");
     }
     // password が空文字・未指定の場合は既存値を保持する（ID のみ変更）
-    setCrawlerCredential(db, cred.loginId, typeof rawPassword === "string" ? rawPassword : "");
+    credential = resolveCrawlerCredential(db, cred.loginId, typeof rawPassword === "string" ? rawPassword : "");
   }
+
+  // 2) 書込フェーズ: 検証を通った値だけを書く（ここで検証由来の例外は起きない）
+  if (scheduledRefreshTime !== undefined) setScheduledRefreshTime(db, scheduledRefreshTime);
+  if (lowBalanceThreshold !== undefined) setLowBalanceThreshold(db, lowBalanceThreshold);
+  if (withdrawalAlertDays !== undefined) setWithdrawalAlertDays(db, withdrawalAlertDays);
+  if (withdrawalAccountId !== undefined) setWithdrawalAccountId(db, withdrawalAccountId);
+  if (cardUpdates !== undefined) applyCardWithdrawalLinks(db, cardUpdates);
+  if (credential !== undefined) setCrawlerCredential(db, credential.loginId, credential.password);
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -194,7 +294,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-async function handleSettingsPut(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handleSettingsPut(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const body = await readJsonBody(req);
     applySettingsUpdate(getDb(), body);

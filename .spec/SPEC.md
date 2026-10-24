@@ -18,12 +18,16 @@
 
 ## 機能要件（追加: F7 クレカ引き落とし警告）
 - [ ] F7: クレカ（クレジットカード）の引き落としで口座残高が不足する事故を、事前に警告する
-  - 判定: クレカ口座の**引き落とし予定額 > 引き落とし口座の残高** かつ 引き落とし日まで **N日以内**（`app_settings` の設定キー、既定 N=7日）
-  - 警告 kind: `AccountAlertKind` に `"scheduled_withdrawal"` を追加（既存 `"low_balance"` / `"account_status"` と同居）
-  - 表示先は **web と MCP の両方**: web は `apps/web/src/app/accounts/page.tsx` の警告バッジ＋アラート一覧、MCP は `get_account_alerts` がそのまま新 kind を返す
-  - データ源: **ssnb の実測で確定**。クレカ口座のページに引き落とし予定額／引き落とし日が存在すればそれを使う（既存の死に列 `account_statuses.scheduled_withdrawal_amount` / `scheduled_withdrawal_confirmed` を生産者ごと埋める）
-  - 実測で取れない場合のフォールバック順: ① 取引履歴の `カード引落` 実績から直近の引き落とし額を推定 ② それも無ければ警告を出さず「データ無し」を明示（**嘘の金額を出さない**）
-  - 引き落とし口座の紐付け: ssnb が提示するなら使い、無ければ銀行口座のうち残高で判定可能なものへ既定設定で紐付ける（`app_settings`）
+  - **実測結果（2026-10-24）**: ssnb の `/accounts/show/{id}`（口座詳細）に「引き落とし予定額」列が存在する。三井住友カードは `-44,200円 (2026/10/26)` の形式で**金額と期日が連結**、`引き落とし予定額合計：-75,267円` の合計行もある。PayPayカードは `引き落とし予定額：未定` で全セル `−`。`/accounts`（一覧）には予定の列は無い
+  - 判定: 引き落とし予定額 > 判定口座の残高、かつ引き落とし日まで **0〜N日**（`app_settings` の `withdrawal_alert_days`、既定7・範囲1〜30にクランプ）
+  - 金額は**期日ごとにグルーピングし、今日以降で最も早い期日の明細だけ**を合算する（期日が割れた明細を合算すると「その日には落ちない金額」になるため）。合計行は明細に数えない
+  - ページに「引き落とし予定額合計」がある場合は明細合算と突き合わせ、**不一致なら null（無警告）**。`shortcut: 合計の文言が変わると検算されない, 文言変更を検知したら必須化`
+  - 警告 kind: `AccountAlertKind` に `"scheduled_withdrawal"` を追加（既存 `"low_balance"` / `"account_status"` と同居。**既存2種の判定結果は不変**）
+  - 判定口座の解決順: ① `withdrawal_account_id` の明示設定（**カード行・存在しない ID は無視**）→ ② 銀行系口座がちょうど1つならそれ（note で自動判定を明示）→ ③ 0個 or 2個以上は**警告せず**「引き落とし口座が未設定です」を UI に出す
+  - カード行の判定は `scheduledWithdrawalAmount !== null || category === "card"`（`guessCategory` に `"card"` 語彙を追加済み。`ACCOUNT_CATEGORIES` には追加しない）
+  - `AccountAlert.balance` は**判定に使った口座の残高**、`shortage = 予定額 - その残高`。カード自身の負残高は返さない（MCP 利用者の誤読防止）
+  - 表示先は **web と MCP の両方**: web は `apps/web/src/app/accounts/page.tsx` の警告バッジ（**口座数**で数え、同一口座の二重計上をしない）＋引き落とし警告カード、MCP は `get_account_alerts` に `withdrawal_alert_days` / `withdrawal_account_id` 引数を追加（新ツールは作らない）
+  - 予定額が取れないカード（PayPayカード等）は警告せず、口座カードに**「引落予定：未定」**を表示（**嘘の金額を出さない**）
   - 誤警告より無警告を選ぶ: 金額・期日のどちらかが欠けたら警告しない
 
 ## 非機能要件
@@ -46,5 +50,7 @@
 - SSR 画面の HTML 構造とセレクタ
 
 ## 未実測リスク（F7）
-- ssnb の `/accounts` または `/accounts/show/{id}` にクレカの**引き落とし予定額・引き落とし日**の列が存在するか（無ければ取引履歴推定にフォールバック）
-- クレカ口座が `institution_categories.name="カード"` で正しく分類されているか（`guessInstitutionCategory` は金融機関名の文字列マッチのみ）
+- 他社カード（三井住友カード以外）の口座詳細ページの表構造。`parseScheduledWithdrawal` は `th` に「引き落とし予定額」を含む表を探す実装で、構造が違えば null＝無警告側に倒れる（誤警告はしない）
+- 「引き落とし予定額合計」の文言・出現回数。変わると検算が黙って無効化される（フェイルオープン、`shortcut:` コメントで明示）
+- 本番 DB で `assignAccountCategories`（`apps/crawler/src/scrape.ts:160`）が次回スクレイプ後に実際に `category_id` を埋めるか。それまで `accounts.category` フォールバックで動く
+- `todayJst()` が `packages/db/src/repo.ts:36`（9h オフセット）と `apps/crawler/src/parse.ts:201`（`Intl` + `en-CA`）で二重実装。small-icu ビルドの Node では `en-CA` が使えない可能性（crawler イメージは full-icu 想定だが未検証）

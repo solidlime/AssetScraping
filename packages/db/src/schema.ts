@@ -5,6 +5,7 @@ import {
   text,
   uniqueIndex,
   index,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 
 // ============================================================================
@@ -179,6 +180,15 @@ export const accounts = sqliteTable(
     }),
     /** 本家互換 */
     isActive: integer("is_active", { mode: "boolean" }).default(true),
+    /**
+     * F7: カード行のみ意味を持つ「このカードの引き落とし口座」。
+     * 手動設定専用 — crawler の upsert（upsertAccount / upsertAccounts / upsertById /
+     * saveAccountStatuses）はこの列を書かない（スクレイプで設定が消えるため）。
+     */
+    withdrawalAccountId: text("withdrawal_account_id").references(
+      (): AnySQLiteColumn => accounts.id,
+      { onDelete: "set null" },
+    ),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

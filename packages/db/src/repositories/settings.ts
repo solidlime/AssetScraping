@@ -59,10 +59,7 @@ export function getLowBalanceThreshold(db: Database): number {
 }
 
 export function setLowBalanceThreshold(db: Database, value: number): void {
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`しきい値は 0 以上の数値で指定してください: ${value}`);
-  }
-  setSetting(db, SETTING_KEYS.lowBalanceThreshold, String(Math.round(value)));
+  setSetting(db, SETTING_KEYS.lowBalanceThreshold, String(validateLowBalanceThreshold(value)));
 }
 
 /** "HH:MM" (JST) を正規化する。"6:5" → "06:05"。解釈不能は null */
@@ -82,29 +79,53 @@ export function getScheduledRefreshTime(db: Database): string {
 }
 
 export function setScheduledRefreshTime(db: Database, value: string): void {
+  setSetting(db, SETTING_KEYS.scheduledRefreshTime, validateScheduleTime(value));
+}
+
+/** 設定値の検証（書込を伴わない）。呼び出し側が先に検証を済ませてから書けるよう純粋関数にする */
+export function validateLowBalanceThreshold(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`しきい値は 0 以上の数値で指定してください: ${value}`);
+  }
+  return Math.round(value);
+}
+
+/** 設定値の検証（書込を伴わない）。"6:5" → "06:05"、解釈不能は throw */
+export function validateScheduleTime(value: string): string {
   const normalized = normalizeScheduleTime(value);
   if (normalized === null) {
     throw new Error(`時刻は HH:MM (JST) 形式で指定してください: ${value}`);
   }
-  setSetting(db, SETTING_KEYS.scheduledRefreshTime, normalized);
+  return normalized;
+}
+
+/** 設定値の検証（書込を伴わない）。範囲外・非数値は throw */
+export function validateWithdrawalAlertDays(value: number): number {
+  if (!Number.isFinite(value) || value < MIN_WITHDRAWAL_ALERT_DAYS || value > MAX_WITHDRAWAL_ALERT_DAYS) {
+    throw new Error(
+      `日数は ${MIN_WITHDRAWAL_ALERT_DAYS}〜${MAX_WITHDRAWAL_ALERT_DAYS} の数値で指定してください: ${value}`,
+    );
+  }
+  return Math.round(value);
 }
 
 /**
- * F7: 引き落とし日まで何日以内なら警告するか。1〜30 にクランプ、未設定・不正値は既定 7 日
+ * F7: 引き落とし日まで何日以内なら警告するかのクランプ。1〜30 に丸める。
+ * 未設定・非数値は既定 7 日、0 や負値は最小値へ丸める（「警告ゼロ」が無言で成立するのを防ぐ）。
+ * DB 経路（getWithdrawalAlertDays）と opts 経路（alerts.ts）の両方がこの1本を通る。
  */
+export function clampWithdrawalAlertDays(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) return DEFAULT_WITHDRAWAL_ALERT_DAYS;
+  return Math.min(MAX_WITHDRAWAL_ALERT_DAYS, Math.max(MIN_WITHDRAWAL_ALERT_DAYS, Math.round(value)));
+}
+
 export function getWithdrawalAlertDays(db: Database): number {
   const raw = getSetting(db, SETTING_KEYS.withdrawalAlertDays);
-  if (raw === null) return DEFAULT_WITHDRAWAL_ALERT_DAYS;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return DEFAULT_WITHDRAWAL_ALERT_DAYS;
-  return Math.min(MAX_WITHDRAWAL_ALERT_DAYS, Math.max(MIN_WITHDRAWAL_ALERT_DAYS, Math.round(n)));
+  return clampWithdrawalAlertDays(raw === null ? null : Number(raw));
 }
 
 export function setWithdrawalAlertDays(db: Database, value: number): void {
-  if (!Number.isFinite(value) || value < MIN_WITHDRAWAL_ALERT_DAYS || value > MAX_WITHDRAWAL_ALERT_DAYS) {
-    throw new Error(`日数は ${MIN_WITHDRAWAL_ALERT_DAYS}〜${MAX_WITHDRAWAL_ALERT_DAYS} の数値で指定してください: ${value}`);
-  }
-  setSetting(db, SETTING_KEYS.withdrawalAlertDays, String(Math.round(value)));
+  setSetting(db, SETTING_KEYS.withdrawalAlertDays, String(validateWithdrawalAlertDays(value)));
 }
 
 /** F7: 引き落とし口座（残高と比べる口座）の ID。未設定は null */
@@ -137,13 +158,22 @@ export function getCrawlerCredential(
   return null;
 }
 
-/** 認証情報を登録・変更（パスワードが空文字の場合は既存値を保持する） */
-export function setCrawlerCredential(db: Database, loginId: string, password: string): void {
-  const prevPassword = getSetting(db, SETTING_KEYS.ssnbPassword);
-  const nextPassword = password.length > 0 ? password : prevPassword;
+/** 認証情報の検証（書込を伴わない）。空文字パスワードは既存値で補う。補えなければ throw */
+export function resolveCrawlerCredential(
+  db: Database,
+  loginId: string,
+  password: string,
+): { loginId: string; password: string } {
+  const nextPassword = password.length > 0 ? password : getSetting(db, SETTING_KEYS.ssnbPassword);
   if (nextPassword === null || nextPassword.length === 0) {
     throw new Error("パスワードが未設定です（空文字指定時は既存パスワードが必要）");
   }
-  setSetting(db, SETTING_KEYS.ssnbLoginId, loginId);
-  setSetting(db, SETTING_KEYS.ssnbPassword, nextPassword);
+  return { loginId, password: nextPassword };
+}
+
+/** 認証情報を登録・変更（パスワードが空文字の場合は既存値を保持する） */
+export function setCrawlerCredential(db: Database, loginId: string, password: string): void {
+  const cred = resolveCrawlerCredential(db, loginId, password);
+  setSetting(db, SETTING_KEYS.ssnbLoginId, cred.loginId);
+  setSetting(db, SETTING_KEYS.ssnbPassword, cred.password);
 }

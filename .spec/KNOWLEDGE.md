@@ -56,3 +56,4 @@
 - **引き落とし日が全明細で過去日なら最新の過去日を採用**する設計（フェイルセーフ）。`remaining >= 0` で無警告に倒れる。代償として、次月以降の明細がカードページに出るまで警告が出ない
 - `Account.category`（`packages/shared`）は `StoredAccountCategory = AccountCategory | "card"`。DB の `accounts.category` は text 列で enum 制約なし、`ACCOUNT_CATEGORIES` は DB スキーマ語彙なので `"card"` は含めない
 - `todayJst()` は `@asset-scraping/db` の実装を一本化して使う（crawler にローカル実装を置かない。`Intl` 依存を crawler の本経路から消すため）
+- **drizzle-kit 0.30 は自己参照 FK の `ON DELETE` 節を `ALTER TABLE ... ADD COLUMN` DDL に出力しない（実測）**。`meta/0007_snapshot.json` は `onDelete: "set null"` を宣言しているのに、生成された `0007_overjoyed_bloodstorm.sql` は `REFERENCES accounts(id)` 止まりだった。SQLite 自体は ADD COLUMN の `ON DELETE SET NULL` を実効化する（SQLite 3.53.4 で `PRAGMA foreign_key_list` = `SET NULL`、親 DELETE で子が NULL になることを実測）ので、必要なら migration SQL を手で補う

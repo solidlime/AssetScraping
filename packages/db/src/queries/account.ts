@@ -86,6 +86,8 @@ export async function getAccountsWithAssets(groupIdParam?: string, db: Db = getD
       category: schema.accounts.category,
       categoryName: schema.institutionCategories.name,
       categoryDisplayOrder: schema.institutionCategories.displayOrder,
+      // F7: カード行の引き落とし口座リンク（設定画面のカード別マッピング用）
+      withdrawalAccountId: schema.accounts.withdrawalAccountId,
     })
     .from(schema.accounts)
     .leftJoin(schema.accountStatuses, eq(schema.accountStatuses.accountId, schema.accounts.id))

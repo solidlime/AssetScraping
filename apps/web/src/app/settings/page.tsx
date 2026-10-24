@@ -1,4 +1,4 @@
-import { getAccountsGroupedByCategory } from "@asset-scraping/db";
+import { getAccountsGroupedByCategory, isBankLikeAccount } from "@asset-scraping/db";
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
 import { RefreshButton } from "../../components/RefreshButton";
@@ -14,11 +14,14 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  // F7: 引き落とし口座に選べるのは銀行系口座（カード自身の負債残高は判定に使わない）。
-  // 本番 DB は institution_categories が空なので accounts.category も見る
-  const withdrawalAccounts = (await getAccountsGroupedByCategory())
-    .flatMap((group) => group.accounts)
-    .filter((a) => a.category !== "card" && (a.categoryName === "銀行" || a.category === "bank"))
+  const allAccounts = (await getAccountsGroupedByCategory()).flatMap((group) => group.accounts);
+  // F7: 引き落とし口座に選べるのは銀行系口座（カード自身の負債残高は判定に使わない）
+  const withdrawalAccounts = allAccounts
+    .filter((a) => isBankLikeAccount(a))
+    .map((a) => ({ id: a.id, name: a.name }));
+  // F7: カード別の引き落とし口座（カード行のみ）
+  const cards = allAccounts
+    .filter((a) => a.category === "card")
     .map((a) => ({ id: a.id, name: a.name }));
 
   return (
@@ -27,7 +30,7 @@ export default async function SettingsPage() {
         <OtpForm />
         <Card>
           <CardContent className="pt-6">
-            <SettingsForm withdrawalAccounts={withdrawalAccounts} />
+            <SettingsForm withdrawalAccounts={withdrawalAccounts} cards={cards} />
           </CardContent>
         </Card>
         <p className="text-xs text-muted-foreground">

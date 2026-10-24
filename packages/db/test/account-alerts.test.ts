@@ -41,14 +41,29 @@ function dayOffset(days: number): string {
   return new Date(d.getTime() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** 銀行カテゴリ（institution_categories）を投入し、その ID を返す */
+function seedBankCategory(): number {
+  const ts = new Date().toISOString();
+  db.insert(schema.institutionCategories)
+    .values({ name: "銀行", displayOrder: 1, createdAt: ts, updatedAt: ts })
+    .run();
+  return db.select({ id: schema.institutionCategories.id }).from(schema.institutionCategories).get()!.id;
+}
+
 /** クレカ口座（category="card"・引き落とし予定額・予定日付き）を投入 */
 function seedCard(
   id: string,
   name: string,
-  opts: { amount: number | null; date: string | null },
+  opts: { amount: number | null; date: string | null; withdrawalAccountId?: string },
 ): void {
   seedAccount(id, name, name, 0);
-  db.update(schema.accounts).set({ category: "card" }).where(eq(schema.accounts.id, id)).run();
+  db.update(schema.accounts)
+    .set({
+      category: "card",
+      ...(opts.withdrawalAccountId !== undefined ? { withdrawalAccountId: opts.withdrawalAccountId } : {}),
+    })
+    .where(eq(schema.accounts.id, id))
+    .run();
   db.update(schema.accountStatuses)
     .set({
       scheduledWithdrawalAmount: opts.amount,
@@ -58,6 +73,17 @@ function seedCard(
     .where(eq(schema.accountStatuses.accountId, id))
     .run();
 }
+
+/** accounts 行だけ作る（accountStatuses が無い = loadAlertRows に出てこない口座） */
+function seedAccountWithoutStatus(id: string, name: string): void {
+  const ts = new Date().toISOString();
+  db.insert(schema.accounts)
+    .values({ id, name, institution: name, category: "bank", createdAt: ts, updatedAt: ts })
+    .run();
+}
+
+const scheduledKinds = () =>
+  getAccountAlerts(db, { threshold: -1 }).filter((a) => a.kind === "scheduled_withdrawal");
 
 describe("getAccountAlerts", () => {
   it("しきい値以下の口座を low_balance として返す", () => {
@@ -133,18 +159,6 @@ describe("getAccountAlerts", () => {
 
 // F7: クレカ引き落とし警告。threshold: -1 で low_balance を無効化し、新 kind だけを見る
 describe("getAccountAlerts / scheduled_withdrawal", () => {
-  /** 銀行カテゴリ（引き落とし口座の合計対象）を投入し、その口座 ID を返す */
-  function seedBankCategory(): number {
-    const ts = new Date().toISOString();
-    db.insert(schema.institutionCategories)
-      .values({ name: "銀行", displayOrder: 1, createdAt: ts, updatedAt: ts })
-      .run();
-    return db.select({ id: schema.institutionCategories.id }).from(schema.institutionCategories).get()!.id;
-  }
-
-  const scheduledKinds = () =>
-    getAccountAlerts(db, { threshold: -1 }).filter((a) => a.kind === "scheduled_withdrawal");
-
   it("引き落とし予定額が残高を超え、N 日以内なら警告する（不足額付き）", () => {
     seedAccount("bank-1", "青空銀行", "青空銀行", 30_000, "ok", seedBankCategory());
     seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
@@ -310,12 +324,35 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
     expect(getWithdrawalAlertDays(db)).toBe(30);
     setSetting(db, SETTING_KEYS.withdrawalAlertDays, "0");
     expect(getWithdrawalAlertDays(db)).toBe(1);
+    setSetting(db, SETTING_KEYS.withdrawalAlertDays, "-5");
+    expect(getWithdrawalAlertDays(db)).toBe(1);
     setSetting(db, SETTING_KEYS.withdrawalAlertDays, "abc");
     expect(getWithdrawalAlertDays(db)).toBe(DEFAULT_WITHDRAWAL_ALERT_DAYS);
     setWithdrawalAlertDays(db, 14);
     expect(getWithdrawalAlertDays(db)).toBe(14);
     expect(() => setWithdrawalAlertDays(db, 0)).toThrow(/1〜30/);
     expect(() => setWithdrawalAlertDays(db, 31)).toThrow(/1〜30/);
+  });
+
+  it("opts の withdrawalAlertDays も DB 経路と同じ 1〜30 のクランプを通る（0 は MIN、非数値は既定）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 0);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    const withdrawn = (days: number) =>
+      getAccountAlerts(db, { threshold: -1, withdrawalAlertDays: days }).filter(
+        (a) => a.kind === "scheduled_withdrawal",
+      );
+    // 0 / -5 は DB 経路と同じく MIN=1 に丸められる: 3 日後は窓外
+    expect(withdrawn(0)).toHaveLength(0);
+    expect(withdrawn(-5)).toHaveLength(0);
+    expect(withdrawn(1)).toHaveLength(0);
+    // 非数値は既定 7 日: 3 日後は窓内
+    expect(withdrawn(Number.NaN)).toHaveLength(1);
+    // 上限超は MAX=30 に丸められる
+    expect(withdrawn(31)).toHaveLength(1);
+    // 8 日後は既定 7 日の窓外（既定で動いていることの裏取り）
+    seedCard("card-2", "楽天カード", { amount: 75_267, date: dayOffset(8) });
+    expect(withdrawn(Number.NaN).map((a) => a.accountId)).toEqual(["card-1"]);
+    expect(withdrawn(30).map((a) => a.accountId)).toEqual(["card-1", "card-2"]);
   });
 
   it("既存 kind の判定結果は変わらない（引き落とし列が入っても）", () => {
@@ -330,5 +367,113 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
       "low_balance",
       "scheduled_withdrawal",
     ]);
+  });
+});
+
+// F8: カード別の引き落とし口座。判定は解決先口座ごとに合算、表示はカード単位
+describe("getAccountAlerts / カード別引き落とし口座", () => {
+  it("同一口座を共有する2カードは合算で判定する", () => {
+    seedAccount("bank-rakuten", "楽天銀行", "楽天銀行", 100_000);
+    seedCard("card-rakuten", "楽天カード", { amount: 60_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
+    seedCard("card-paypay", "PayPayカード", { amount: 50_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
+
+    // カード単位で見ると 60,000 <= 100,000 も 50,000 <= 100,000 も足りてしまう
+    // （回帰: 口座単位の合算 110,000 > 100,000 で不足 10,000 が出る）
+    const alerts = scheduledKinds();
+    expect(alerts).toHaveLength(2);
+    const byCard = new Map(alerts.map((a) => [a.accountId, a]));
+    expect(byCard.get("card-rakuten")).toMatchObject({
+      scheduledWithdrawalAmount: 60_000,
+      shortage: 10_000,
+      withdrawalAccountId: "bank-rakuten",
+      withdrawalAccountName: "楽天銀行",
+      balance: 100_000,
+    });
+    expect(byCard.get("card-paypay")).toMatchObject({
+      scheduledWithdrawalAmount: 50_000,
+      shortage: 10_000,
+      withdrawalAccountId: "bank-rakuten",
+    });
+  });
+
+  it("口座を共有していても合計が残高以内なら警告しない", () => {
+    seedAccount("bank-rakuten", "楽天銀行", "楽天銀行", 100_000);
+    seedCard("card-rakuten", "楽天カード", { amount: 40_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
+    seedCard("card-paypay", "PayPayカード", { amount: 50_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
+    expect(scheduledKinds()).toHaveLength(0);
+  });
+
+  it("解決先が違うカードは別々に判定する", () => {
+    seedAccount("bank-a", "楽天銀行", "楽天銀行", 100_000);
+    seedAccount("bank-b", "三井住友銀行", "三井住友銀行", 10_000);
+    seedCard("card-rakuten", "楽天カード", { amount: 60_000, date: dayOffset(5), withdrawalAccountId: "bank-a" });
+    seedCard("card-smbc", "三井住友カード", { amount: 50_000, date: dayOffset(5), withdrawalAccountId: "bank-b" });
+    const alerts = scheduledKinds();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      accountId: "card-smbc",
+      shortage: 40_000,
+      withdrawalAccountId: "bank-b",
+    });
+  });
+
+  it("リンク先の口座が見つからなければ警告せず note を出す（グローバル設定へ落とさない）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    // accounts 行はあるがステータス行が無い = 警告判定の rows に出てこない
+    seedAccountWithoutStatus("ghost-bank", "消えた銀行");
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3), withdrawalAccountId: "ghost-bank" });
+    // グローバル設定は十分な残高の銀行を指す — ここにフォールバックしたら嘘の不足額は出ないが、
+    // 「解決不能」を隠すことになるのでフォールバックしないことを note の有無で検証する
+    setSetting(db, SETTING_KEYS.withdrawalAccountId, "bank-1");
+    const alerts = scheduledKinds();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.note).toBe("（引き落とし口座を解決できませんでした）");
+    expect(alerts[0]?.shortage).toBeUndefined();
+    expect(alerts[0]?.withdrawalAccountId).toBeUndefined();
+  });
+
+  it("リンク先がカード口座なら解決不能として扱う", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    seedCard("card-2", "楽天カード", { amount: 60_000, date: dayOffset(3), withdrawalAccountId: "card-1" });
+    const alert = scheduledKinds().find((a) => a.accountId === "card-2");
+    expect(alert?.note).toBe("（引き落とし口座を解決できませんでした）");
+    expect(alert?.shortage).toBeUndefined();
+  });
+
+  it("リンクが null ならグローバル設定にフォールバックする", () => {
+    const bankCat = seedBankCategory();
+    seedAccount("bank-1", "青空銀行", "青空銀行", 30_000, "ok", bankCat);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000, "ok", bankCat);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    // 銀行が複数なので未設定では判定不能 → 警告なし
+    expect(scheduledKinds()).toHaveLength(0);
+    setSetting(db, SETTING_KEYS.withdrawalAccountId, "bank-1");
+    const alert = scheduledKinds()[0];
+    expect(alert).toMatchObject({
+      accountId: "card-1",
+      shortage: 45_267,
+      withdrawalAccountId: "bank-1",
+      withdrawalAccountName: "青空銀行",
+    });
+    expect(alert?.note).toBeUndefined();
+  });
+
+  it("リンク済みカードはグローバル設定より優先される（note も付かない）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
+    seedAccount("bank-2", "楽天銀行", "楽天銀行", 200_000);
+    seedCard("card-1", "楽天カード", { amount: 75_267, date: dayOffset(3), withdrawalAccountId: "bank-2" });
+    setSetting(db, SETTING_KEYS.withdrawalAccountId, "bank-1");
+    // グローバル(bank-1: 30,000)なら不足だが、リンク先(bank-2: 200,000)で足りる
+    expect(scheduledKinds()).toHaveLength(0);
+    const state = getWithdrawalAccountState(db);
+    expect(state).toMatchObject({ status: "set", accountId: "bank-1" });
+  });
+
+  it("窓外の予定は合算に含めない", () => {
+    seedAccount("bank-rakuten", "楽天銀行", "楽天銀行", 100_000);
+    seedCard("card-rakuten", "楽天カード", { amount: 60_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
+    seedCard("card-paypay", "PayPayカード", { amount: 50_000, date: dayOffset(40), withdrawalAccountId: "bank-rakuten" });
+    expect(scheduledKinds()).toHaveLength(0);
   });
 });

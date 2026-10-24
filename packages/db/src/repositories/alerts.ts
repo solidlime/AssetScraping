@@ -3,7 +3,12 @@ import type { Database } from "../client.ts";
 import { accountStatuses, accounts, institutionCategories } from "../schema.ts";
 import { toAccountStatusType, type AccountStatusType } from "../types.ts";
 import { todayJst } from "../repo.ts";
-import { getLowBalanceThreshold, getWithdrawalAccountId, getWithdrawalAlertDays } from "./settings.ts";
+import {
+  clampWithdrawalAlertDays,
+  getLowBalanceThreshold,
+  getWithdrawalAccountId,
+  getWithdrawalAlertDays,
+} from "./settings.ts";
 
 /**
  * 口座警告（本家 bean・account-notifications-data.ts の相当物）。
@@ -25,10 +30,15 @@ export interface AccountAlert {
   scheduledWithdrawalAmount?: number;
   /** scheduled_withdrawal のみ: 引き落とし予定日 (YYYY-MM-DD) */
   scheduledWithdrawalDate?: string;
-  /** scheduled_withdrawal のみ: 不足額（予定額 - 判定に使った口座の残高） */
+  /**
+   * scheduled_withdrawal のみ: 不足額 **（口座単位）**。
+   * 同一口座を共有する複数カードには同じ値が載るので、UI 側でカード単位に合算すると倍になる。
+   */
   shortage?: number;
   /** scheduled_withdrawal のみ: 判定に使った引き落とし口座の名称 */
   withdrawalAccountName?: string;
+  /** scheduled_withdrawal のみ: 解決先の引き落とし口座 ID（解決不能なら未設定） */
+  withdrawalAccountId?: string;
   /** scheduled_withdrawal のみ: 設定未投入など注意書き */
   note?: string;
 }
@@ -44,6 +54,8 @@ interface AlertRow {
   categoryName: string | null;
   /** accounts.category（"bank" / "card" 等）。本番 DB は category_id が未充填のためこちらで判定する */
   category: string;
+  /** カード行の引き落とし口座リンク（手動設定専用。null ならグローバル設定で解決） */
+  withdrawalAccountId: string | null;
   scheduledWithdrawalAmount: number | null;
   scheduledWithdrawalDate: string | null;
 }
@@ -69,9 +81,17 @@ export interface WithdrawalAccountState {
 const isCardRow = (row: AlertRow): boolean =>
   row.scheduledWithdrawalAmount !== null || row.category === "card";
 
+/**
+ * 銀行系口座（引き落とし口座の候補）かの判定。web（設定画面）と共有する唯一の述語。
+ * カードは category="card" で必ず除外する。
+ */
+export function isBankLikeAccount(a: { category: string; categoryName?: string | null }): boolean {
+  return a.category !== "card" && (a.categoryName === "銀行" || a.category === "bank");
+}
+
 /** 銀行系口座か。カードは明示的に除外する */
 function isBankRow(row: AlertRow): boolean {
-  return !isCardRow(row) && (row.categoryName === "銀行" || row.category === "bank");
+  return !isCardRow(row) && isBankLikeAccount(row);
 }
 
 /**
@@ -98,46 +118,109 @@ function resolveWithdrawalAccount(rows: AlertRow[], withdrawalAccountId: string 
   return { status: banks.length === 0 ? "none" : "ambiguous", accountId: null, accountName: null, balance: null };
 }
 
+const AUTO_NOTE = "（引き落とし口座が未設定のため自動判定）";
+const UNRESOLVED_NOTE = "（引き落とし口座を解決できませんでした）";
+
 /**
  * F7: クレカの引き落とし予定額が引き落とし口座の残高を超え、かつ期日が N 日以内のものを返す。
  * 金額・期日のどちらかが欠けている口座は警告しない（誤警告より無警告）。
- * 引き落とし口座は設定 `withdrawal_account_id`、未設定なら銀行口座がちょうど1つの時だけそれを使う。
+ * 引き落とし口座はカード行の `withdrawal_account_id`、無ければ設定 `withdrawal_account_id`、
+ * 未設定なら銀行口座がちょうど1つの時だけそれを使う。
+ * 不足判定は解決先口座単位（合算）、返す警告はカード単位。
  */
+
+/** カード行 1 枚の解決先（解決できなければ null） */
+interface ResolvedSource {
+  accountId: string;
+  accountName: string;
+  balance: number;
+}
+
+/**
+ * カード行の引き落とし口座を決める。
+ * 1. カード行にリンクがあればその口座（存在しない/カード行を指すなら解決不能。グローバルへは落とさない）
+ * 2. リンクが無ければグローバル設定 → 銀行 1 つ → none/ambiguous の順（現行踏襲）
+ */
+function resolveCardSource(
+  row: AlertRow,
+  rows: AlertRow[],
+  fallback: WithdrawalAccountState,
+): { source: ResolvedSource | null; note?: string } {
+  if (row.withdrawalAccountId !== null) {
+    const target = rows.find((r) => r.accountId === row.withdrawalAccountId);
+    if (!target || isCardRow(target)) return { source: null, note: UNRESOLVED_NOTE };
+    return {
+      source: { accountId: target.accountId, accountName: target.accountName, balance: target.balance },
+    };
+  }
+  if ((fallback.status === "set" || fallback.status === "single") && fallback.accountId !== null) {
+    return {
+      source: {
+        accountId: fallback.accountId,
+        accountName: fallback.accountName ?? "",
+        balance: fallback.balance ?? 0,
+      },
+      ...(fallback.status === "single" ? { note: AUTO_NOTE } : {}),
+    };
+  }
+  return { source: null };
+}
+
 function buildScheduledWithdrawalAlerts(
   rows: AlertRow[],
   opts: { alertDays: number; withdrawalAccountId: string | null; today: string },
 ): AccountAlert[] {
-  const scheduled = rows.filter(
-    (row) => row.scheduledWithdrawalAmount !== null && row.scheduledWithdrawalDate !== null,
-  );
-  if (scheduled.length === 0) return [];
+  const inWindow = rows.filter((row) => {
+    if (row.scheduledWithdrawalAmount === null || row.scheduledWithdrawalDate === null) return false;
+    const remaining = daysUntil(opts.today, row.scheduledWithdrawalDate);
+    return remaining >= 0 && remaining <= opts.alertDays;
+  });
+  if (inWindow.length === 0) return [];
 
-  const source = resolveWithdrawalAccount(rows, opts.withdrawalAccountId);
-  const available = source.balance;
-  if (available === null || source.accountId === null) return [];
-  // 口座名は warning 側の withdrawalAccountName / 本文で出す（ここで重ねて出さない）
-  const note = source.status === "single" ? "（引き落とし口座が未設定のため自動判定）" : undefined;
+  const fallback = resolveWithdrawalAccount(rows, opts.withdrawalAccountId);
+  const resolved = inWindow.map((row) => ({
+    row,
+    ...resolveCardSource(row, rows, fallback),
+  }));
 
-  return scheduled
-    .filter((row) => {
-      const amount = row.scheduledWithdrawalAmount as number;
-      const date = row.scheduledWithdrawalDate as string;
-      const remaining = daysUntil(opts.today, date);
-      return amount > available && remaining >= 0 && remaining <= opts.alertDays;
-    })
-    .map((row) => ({
+  // 判定は「解決先口座ごとに合算」— 同一口座を共有するカードの予定額を足してから残高と比べる。
+  // 合算対象は**窓内（opts.alertDays 日以内）に引き落とされる予定のみ**（窓外の予定は足さない）
+  const totals = new Map<string, number>();
+  for (const { row, source } of resolved) {
+    if (!source) continue;
+    totals.set(source.accountId, (totals.get(source.accountId) ?? 0) + (row.scheduledWithdrawalAmount as number));
+  }
+
+  const alerts: AccountAlert[] = [];
+  for (const { row, source, note } of resolved) {
+    const base = {
       kind: "scheduled_withdrawal" as const,
       accountId: row.accountId,
       accountName: row.accountName,
       institution: row.institution,
-      balance: available,
       status: toAccountStatusType(row.status),
       scheduledWithdrawalAmount: row.scheduledWithdrawalAmount as number,
       scheduledWithdrawalDate: row.scheduledWithdrawalDate as string,
-      shortage: (row.scheduledWithdrawalAmount as number) - available,
-      withdrawalAccountName: source.accountName ?? undefined,
+    };
+    if (!source) {
+      // 解決不能: 不足判定はしない（短額を捏造しない）。残高欄はカード行自身の値
+      if (note === undefined) continue; // グローバル設定未解決（none/ambiguous）は現行どおり黙る
+      alerts.push({ ...base, balance: row.balance, note });
+      continue;
+    }
+    const total = totals.get(source.accountId) ?? 0;
+    if (total <= source.balance) continue;
+    alerts.push({
+      ...base,
+      balance: source.balance,
+      // 口座単位の不足額（共有カードには同じ値が載る）
+      shortage: total - source.balance,
+      withdrawalAccountName: source.accountName || undefined,
+      withdrawalAccountId: source.accountId,
       ...(note !== undefined ? { note } : {}),
-    }));
+    });
+  }
+  return alerts;
 }
 
 /** 警告判定に使う口座×ステータスの平坦な行。本番 DB は category_id 未充填なので category も併用する */
@@ -151,6 +234,7 @@ function loadAlertRows(db: Database): AlertRow[] {
       status: accountStatuses.status,
       categoryName: institutionCategories.name,
       category: accounts.category,
+      withdrawalAccountId: accounts.withdrawalAccountId,
       scheduledWithdrawalAmount: accountStatuses.scheduledWithdrawalAmount,
       scheduledWithdrawalDate: accountStatuses.scheduledWithdrawalDate,
     })
@@ -215,7 +299,8 @@ export function getAccountAlerts(
   const merged = [...lowBalanceAlerts, ...statusAlerts.filter((a) => !lowIds.has(a.accountId))];
 
   const withdrawalAlerts = buildScheduledWithdrawalAlerts(rows, {
-    alertDays: opts.withdrawalAlertDays ?? getWithdrawalAlertDays(db),
+    // opts 経路も DB 経路と同じ 1 本のクランプを通す（0/負/NaN で警告ゼロが無言成立するのを防ぐ）
+    alertDays: clampWithdrawalAlertDays(opts.withdrawalAlertDays ?? getWithdrawalAlertDays(db)),
     withdrawalAccountId:
       opts.withdrawalAccountId !== undefined ? opts.withdrawalAccountId : getWithdrawalAccountId(db),
     today: opts.today ?? todayJst(),

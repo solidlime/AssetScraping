@@ -32,6 +32,8 @@ const here = fileURLToPath(new URL("..", import.meta.url));
 const dbs: DB[] = [];
 function freshDb(): DB {
   const sqlite = new BetterSqlite3(":memory:");
+  // createDb と同じく FK を有効化（ON DELETE 節を実効化させる）
+  sqlite.pragma("foreign_keys = ON");
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: `${here}/drizzle` });
   dbs.push(db);
@@ -183,6 +185,36 @@ describe("本家互換 schema 整合性", () => {
       .run();
     const row = db.select().from(transactions).where(eq(transactions.mfId, "tx-1")).get();
     expect(row).toMatchObject({ type: "income", isTransfer: false });
+  });
+
+  // B2: migration 実物の ON DELETE SET NULL を守る回帰テスト。
+  // drizzle-kit で再生成すると ALTER TABLE ... ADD COLUMN から節が静かに消える（.spec/KNOWLEDGE.md に実測記録）
+  it("withdrawal_account_id は親 DELETE で NULL になる（migration 実物の検証）", () => {
+    const db = freshDb();
+    const sqlite = (db as unknown as { $client: BetterSqlite3.Database }).$client;
+    const fk = (sqlite.pragma("foreign_key_list(accounts)") as { from: string; on_delete: string }[]).find(
+      (f) => f.from === "withdrawal_account_id",
+    );
+    expect(fk?.on_delete).toBe("SET NULL");
+
+    db.insert(accounts)
+      .values({ id: "bank-1", name: "SMTB", institution: "SMTB", category: "bank", createdAt: ts, updatedAt: ts })
+      .run();
+    db.insert(accounts)
+      .values({
+        id: "card-1",
+        name: "カード",
+        institution: "カード",
+        category: "card",
+        withdrawalAccountId: "bank-1",
+        createdAt: ts,
+        updatedAt: ts,
+      })
+      .run();
+
+    // 親（銀行）を消しても FK エラーにならず、子（カード）の列が NULL になる
+    expect(() => db.delete(accounts).where(eq(accounts.id, "bank-1")).run()).not.toThrow();
+    expect(db.select().from(accounts).where(eq(accounts.id, "card-1")).get()?.withdrawalAccountId).toBeNull();
   });
 
   it("institution_categories の unique と account_statuses 拡張列が通る", () => {
