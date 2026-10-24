@@ -167,6 +167,48 @@ describe("parseAccounts（/accounts の口座一覧テーブル）", () => {
     expect(accounts[0].status.status).toBeUndefined();
   });
 
+  it("クレカ口座は残高セルが空でも登録する（F7 引き落とし予定の取得対象にするため）", () => {
+    // 実測 2026-10-24 の NAS 実 HTML。カード行の td[1] は <td class="number"></td> で空。
+    // ここで捨てると /accounts/show/{id} を引けず F7 が永久に動かない。
+    const cardHtml = `
+    <html><body><table><tbody>
+      <tr>
+        <td><a href="/accounts/show/IP0DwtoCovpotYPHltPahQ">イオン銀行</a></td>
+        <td>35円</td><td>2026-10-09</td><td>取得済み</td>
+      </tr>
+      <tr id="CjtgSymKu8iorLGZ0C4dVA">
+        <td>
+          <a href="/accounts/show/CjtgSymKu8iorLGZ0C4dVA">楽天カード</a>
+          (<a target="blank" href="https://www.rakuten-card.co.jp/e-navi/">本サイト</a>)
+          <br>sol******<br>
+        </td>
+        <td class="number">
+        </td>
+        <td>2017/10/28<br>(10/23 03:15)</td>
+        <td>正常</td>
+      </tr>
+    </tbody></table></body></html>`;
+    const accounts = parseAccounts(cardHtml);
+    expect(accounts).toHaveLength(2);
+    expect(accounts[1]).toMatchObject({
+      id: "CjtgSymKu8iorLGZ0C4dVA",
+      institution: "楽天カード",
+      category: "card",
+      status: { balance: 0, status: "ok" },
+    });
+  });
+
+  it("残高セルが空の非カード行は従来通り捨てる（銀行を 0 円口座として誤登録しない）", () => {
+    const emptyBankHtml = `
+    <html><body><table><tbody>
+      <tr>
+        <td><a href="/accounts/show/IDbankbankbankbank1">謎の銀行</a></td>
+        <td></td><td>2026-10-09</td><td>取得済み</td>
+      </tr>
+    </tbody></table></body></html>`;
+    expect(() => parseAccounts(emptyBankHtml)).toThrow(ScrapeParseError);
+  });
+
   it("/accounts/show/ リンクが 1 件も無ければ例外", () => {
     expect(() => parseAccounts("<html><body><p>empty</p></body></html>")).toThrow(ScrapeParseError);
   });

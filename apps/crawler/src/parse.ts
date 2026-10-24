@@ -161,7 +161,11 @@ export function parseAccounts(html: string): Array<Account & { status: AccountSt
     if (tds.length < 2) continue;
     const name = cellText(tds[0]);
     const balance = parseYen(cellText(tds[1]));
-    if (!name || balance === null) continue;
+    const category = guessCategory(name);
+    if (!name) continue;
+    // 実測 2026-10: クレカ口座（楽天カード/三井住友カード/PayPayカード）は /accounts 一覧の
+    // 残高セルが空。ここで捨てると /accounts/show を引けず F7 の引き落とし予定が永久に取れない。
+    if (balance === null && category !== "card") continue;
 
     seen.add(id);
     const statusKind = tds.length > 3 ? parseAccountStatusKind(cellText(tds[3])) : undefined;
@@ -169,10 +173,10 @@ export function parseAccounts(html: string): Array<Account & { status: AccountSt
       id,
       name,
       institution: cellText(link) || name,
-      category: guessCategory(name),
+      category,
       status: {
         accountId: id,
-        balance,
+        balance: balance ?? 0,
         scrapedAt,
         ...(statusKind !== undefined
           ? { status: statusKind, statusText: cellText(tds[3]) }
