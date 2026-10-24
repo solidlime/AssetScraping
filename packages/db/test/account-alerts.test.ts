@@ -200,6 +200,15 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
     expect(scheduledKinds()).toHaveLength(1);
   });
 
+  it("institution_categories が未充填でも accounts.category=\"bank\" の残高で判定する（本番 DB の実態）", () => {
+    // カテゴリマスタを作らずに銀行を seed（NAS 実 DB と同じ状況）
+    seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    const alerts = scheduledKinds();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.shortage).toBe(45_267);
+  });
+
   it("既存 kind の判定結果は変わらない（引き落とし列が入っても）", () => {
     seedAccount("bank-1", "青空銀行", "青空銀行", 50_000, "ok", seedBankCategory());
     seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });

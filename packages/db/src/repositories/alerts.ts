@@ -37,6 +37,8 @@ interface AlertRow {
   balance: number;
   status: string | null;
   categoryName: string | null;
+  /** accounts.category（"bank" / "card" 等）。本番 DB は category_id が未充填のためこちらで判定する */
+  category: string;
   scheduledWithdrawalAmount: number | null;
   scheduledWithdrawalDate: string | null;
 }
@@ -63,7 +65,10 @@ function buildScheduledWithdrawalAlerts(
 
   const available = opts.withdrawalAccountId
     ? (rows.find((row) => row.accountId === opts.withdrawalAccountId)?.balance ?? null)
-    : rows.filter((row) => row.categoryName === "銀行").reduce((sum, row) => sum + row.balance, 0);
+    : // 本番 DB は institution_categories が空・category_id が NULL のため accounts.category も見る
+      rows
+        .filter((row) => row.categoryName === "銀行" || row.category === "bank")
+        .reduce((sum, row) => sum + row.balance, 0);
   if (available === null) return [];
 
   return scheduled
@@ -104,6 +109,7 @@ export function getAccountAlerts(
       balance: accountStatuses.balance,
       status: accountStatuses.status,
       categoryName: institutionCategories.name,
+      category: accounts.category,
       scheduledWithdrawalAmount: accountStatuses.scheduledWithdrawalAmount,
       scheduledWithdrawalDate: accountStatuses.scheduledWithdrawalDate,
     })
