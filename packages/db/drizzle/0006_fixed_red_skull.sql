@@ -1,0 +1,1 @@
+ALTER TABLE `account_statuses` ADD `scheduled_withdrawal_date` text;

@@ -220,6 +220,26 @@ export function upsertAccountStatus(db: Database, input: AccountStatus): void {
     .run();
 }
 
+/**
+ * クレカの引き落とし予定額・予定日を保存する（F7）。
+ * ステータス本体（balance/status 等）は触らない（/accounts の 1 回目で書き込み済み）。
+ * amount/date が null のときは既存値をクリアする（ssnb が「未定」に戻った時に古い警告を残さない）。
+ */
+export function saveScheduledWithdrawal(
+  db: Database,
+  input: { accountId: string; amount: number | null; date: string | null },
+): void {
+  db.update(accountStatuses)
+    .set({
+      scheduledWithdrawalAmount: input.amount,
+      scheduledWithdrawalDate: input.date,
+      scheduledWithdrawalConfirmed: input.amount !== null && input.date !== null,
+      updatedAt: nowIso(),
+    })
+    .where(eq(accountStatuses.accountId, input.accountId))
+    .run();
+}
+
 export function upsertDailySnapshot(
   db: Database,
   input: { accountId: string; date: string; balance: number },

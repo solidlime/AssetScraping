@@ -12,6 +12,10 @@ type AccountCardProps = {
   status: AccountStatusType;
   lastUpdated: string | null;
   totalAssets: number;
+  /** F7: クレカの引き落とし予定額（正値） */
+  scheduledWithdrawalAmount?: number | null;
+  /** F7: 引き落とし予定日 (YYYY-MM-DD) */
+  scheduledWithdrawalDate?: string | null;
 };
 
 export function AccountCard({
@@ -21,6 +25,8 @@ export function AccountCard({
   status,
   lastUpdated,
   totalAssets,
+  scheduledWithdrawalAmount,
+  scheduledWithdrawalDate,
 }: AccountCardProps) {
   const href = `/accounts/${mfId}`;
   const isLinkable = mfId !== "unknown";
@@ -39,6 +45,13 @@ export function AccountCard({
         <div className="mb-3">
           <AmountDisplay amount={totalAssets} size="2xl" weight="bold" />
         </div>
+
+        {scheduledWithdrawalAmount != null && scheduledWithdrawalDate && (
+          <div className="mb-3 text-sm text-muted-foreground">
+            引き落とし予定: {scheduledWithdrawalAmount.toLocaleString("ja-JP")}円
+            （{scheduledWithdrawalDate}）
+          </div>
+        )}
 
         <div className="flex items-center justify-between h-5">
           <div className="flex items-center gap-2">

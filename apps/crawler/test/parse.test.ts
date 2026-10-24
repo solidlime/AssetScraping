@@ -5,6 +5,7 @@ import {
   parseAssetHistory,
   parseDate,
   parseHoldings,
+  parseScheduledWithdrawal,
   parseTransactions,
   parseYen,
   parseYenLoose,
@@ -756,5 +757,42 @@ describe("parseHoldings の銘柄コード取り込み（T011）", () => {
     const fund = holdings.find((h) => h.name === "楽天グループ（投信）")!;
     expect(stock.code).toBe("4755");
     expect(fund.code).toBeNull();
+  });
+});
+
+describe("parseScheduledWithdrawal（F7: クレカの引き落とし予定額列）", () => {
+  const cardPage = (rows: string) =>
+    `<html><body>
+      <table><tr><th>種類・名称</th><th>残高</th></tr><tr><td>三井住友カード</td><td>-75,267円</td></tr></table>
+      <table>
+        <tr><th>引き落とし予定額</th><th>ポイント</th></tr>
+        ${rows}
+      </table>
+    </body></html>`;
+
+  it("td に金額と期日が連結されていても拾う（実測の形）", () => {
+    const result = parseScheduledWithdrawal(cardPage(`<tr><td>-44,200円 (2026/10/26)</td><td>100</td></tr>`));
+    expect(result).toEqual({ amount: 44_200, date: "2026-10-26" });
+  });
+
+  it("複数明細は合計し、最も早い期日を採る", () => {
+    const result = parseScheduledWithdrawal(
+      cardPage(
+        `<tr><td>-44,200円 (2026/10/26)</td></tr><tr><td>-31,067円 (2026/10/27)</td></tr>`,
+      ),
+    );
+    expect(result).toEqual({ amount: 75_267, date: "2026-10-26" });
+  });
+
+  it("「引き落とし予定額」列が無いページは null（非クレカ口座）", () => {
+    expect(parseScheduledWithdrawal(`<table><tr><th>残高</th></tr><tr><td>1,000円</td></tr></table>`)).toBeNull();
+  });
+
+  it("未定（全セル −）は null（誤警告より無警告）", () => {
+    expect(parseScheduledWithdrawal(cardPage(`<tr><td>−</td><td>100</td></tr>`))).toBeNull();
+  });
+
+  it("金額だけで期日が無ければ null", () => {
+    expect(parseScheduledWithdrawal(cardPage(`<tr><td>-44,200円</td></tr>`))).toBeNull();
   });
 });

@@ -204,6 +204,8 @@ export const accountStatuses = sqliteTable(
     /** 本家互換: /accounts ページから取得した資産額 */
     totalAssets: integer("total_assets").default(0),
     scheduledWithdrawalAmount: integer("scheduled_withdrawal_amount"),
+    /** F7: 引き落とし予定日 (YYYY-MM-DD)。ssnb 実測の「引き落とし予定額」列の日付 */
+    scheduledWithdrawalDate: text("scheduled_withdrawal_date"),
     scheduledWithdrawalConfirmed: integer("scheduled_withdrawal_confirmed", { mode: "boolean" })
       .notNull()
       .default(false),

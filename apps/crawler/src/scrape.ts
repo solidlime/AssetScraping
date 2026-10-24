@@ -13,6 +13,7 @@ import {
   linkAllAccountsToDefaultGroup,
   regenerateCashFlowPeriods,
   todayJst,
+  saveScheduledWithdrawal,
   upsertAccount,
   upsertAccountStatus,
   upsertAssetHistory,
@@ -37,6 +38,7 @@ import {
   parseAssetHistory,
   parseHoldings,
   parseMonthlyCashFlow,
+  parseScheduledWithdrawal,
   parseTransactions,
 } from "./parse.js";
 import { syncDividends } from "./dividends.js";
@@ -93,6 +95,13 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     const holdingsRows: Holding[] = [];
     for (const acc of accounts) {
       const html = await fetcher.fetch(SSNB_URLS.accountShow(acc.id));
+      // F7: クレカ口座の「引き落とし予定額」列を拾う。非クレカは null（既存値をクリア）。
+      const withdrawal = parseScheduledWithdrawal(html);
+      saveScheduledWithdrawal(db, {
+        accountId: acc.id,
+        amount: withdrawal?.amount ?? null,
+        date: withdrawal?.date ?? null,
+      });
       const holdings = parseHoldings(html, acc.id, {
         category: acc.category as AccountCategory,
         accountName: acc.name,

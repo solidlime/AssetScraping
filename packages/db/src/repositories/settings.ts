@@ -12,10 +12,14 @@ import { appSettings } from "../schema.ts";
 export const DEFAULT_LOW_BALANCE_THRESHOLD = 100_000;
 /** 本家 crontab の定期更新時刻相当（6:00 JST。本家は 6:30 / 15:30 の 2 本） */
 export const DEFAULT_SCHEDULED_REFRESH_TIME = "06:00";
+/** F7: 引き落とし日まで何日以内なら警告するかの既定値 */
+export const DEFAULT_WITHDRAWAL_ALERT_DAYS = 7;
 
 export const SETTING_KEYS = {
   lowBalanceThreshold: "low_balance_threshold",
   scheduledRefreshTime: "scheduled_refresh_time",
+  withdrawalAlertDays: "withdrawal_alert_days",
+  withdrawalAccountId: "withdrawal_account_id",
   ssnbLoginId: "ssnb_login_id",
   ssnbPassword: "ssnb_password",
 } as const;
@@ -81,6 +85,32 @@ export function setScheduledRefreshTime(db: Database, value: string): void {
     throw new Error(`時刻は HH:MM (JST) 形式で指定してください: ${value}`);
   }
   setSetting(db, SETTING_KEYS.scheduledRefreshTime, normalized);
+}
+
+/**
+ * F7: 引き落とし日まで何日以内なら警告するか。未設定・不正値は既定 7 日にフォールバック
+ */
+export function getWithdrawalAlertDays(db: Database): number {
+  const raw = getSetting(db, SETTING_KEYS.withdrawalAlertDays);
+  if (raw === null) return DEFAULT_WITHDRAWAL_ALERT_DAYS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : DEFAULT_WITHDRAWAL_ALERT_DAYS;
+}
+
+export function setWithdrawalAlertDays(db: Database, value: number): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`日数は 0 以上の数値で指定してください: ${value}`);
+  }
+  setSetting(db, SETTING_KEYS.withdrawalAlertDays, String(Math.round(value)));
+}
+
+/** F7: 引き落とし口座（残高と比べる口座）の既定 ID。未設定は null（全口座の合計で判定） */
+export function getWithdrawalAccountId(db: Database): string | null {
+  return getSetting(db, SETTING_KEYS.withdrawalAccountId);
+}
+
+export function setWithdrawalAccountId(db: Database, accountId: string | null): void {
+  setSetting(db, SETTING_KEYS.withdrawalAccountId, accountId ?? "");
 }
 
 /**

@@ -75,6 +75,13 @@ export interface AccountStatus {
   status?: "ok" | "error" | "updating" | "suspended";
   /** 判定根拠となった行テキスト（エラー時の表示用） */
   statusText?: string;
+  /**
+   * クレカの引き落とし予定額（円建て・正値）。ssnb は負値（負債）で返すため絶対値にして持つ。
+   * 未定・非クレカ口座は null（誤警告を避けるため、金額と期日が揃わない限り警告しない）。
+   */
+  scheduledWithdrawalAmount?: number | null;
+  /** クレカの引き落とし予定日 (YYYY-MM-DD)。不明は null */
+  scheduledWithdrawalDate?: string | null;
 }
 
 /** 保有資産（銘柄・数量・評価額・含み損益） */

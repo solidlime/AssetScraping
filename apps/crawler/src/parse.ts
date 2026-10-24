@@ -184,6 +184,47 @@ export function parseAccounts(html: string): Array<Account & { status: AccountSt
 }
 
 // ---------------------------------------------------------------------------
+// クレカの引き落とし予定（F7）
+// ---------------------------------------------------------------------------
+
+/** クレカの引き落とし予定（/accounts/show/{id} の「引き落とし予定額」列） */
+export interface ScheduledWithdrawal {
+  /** 引き落とし予定額の合計（円・正値）。ssnb は負値（負債）で返すため絶対値にする */
+  amount: number;
+  /** 最も早い引き落とし予定日 (YYYY-MM-DD) */
+  date: string;
+}
+
+/**
+ * クレカ口座ページの「引き落とし予定額」列を集計する。実測（2026-10）:
+ * - サマリーに「引き落とし予定額合計：-75,267円」、行は td に「-44,200円 (2026/10/26)」の連結
+ * - 未定（PayPayカード）は全セル「−」で合計も「未定」→ null を返す
+ * - 同じページにポイント／負債／収入・支出詳細の表が同居するため、列見出しで表を特定する
+ * 金額と期日が揃わない場合は null（誤警告より無警告）。
+ */
+export function parseScheduledWithdrawal(html: string): ScheduledWithdrawal | null {
+  const root = parse(html);
+  const table = root
+    .querySelectorAll("table")
+    .find((t) => t.querySelectorAll("th").some((th) => cellText(th).includes("引き落とし予定額")));
+  if (!table) return null;
+
+  let amount = 0;
+  let date: string | null = null;
+  for (const row of table.querySelectorAll("tr")) {
+    for (const cell of row.querySelectorAll("td")) {
+      const text = cellText(cell);
+      const yen = parseYen(text);
+      const day = parseDate(text);
+      if (yen === null || day === null) continue;
+      amount += Math.abs(yen);
+      if (date === null || day < date) date = day;
+    }
+  }
+  return amount > 0 && date !== null ? { amount, date } : null;
+}
+
+// ---------------------------------------------------------------------------
 // 保有資産
 // ---------------------------------------------------------------------------
 

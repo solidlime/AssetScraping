@@ -79,6 +79,7 @@ export async function getAccountsWithAssets(groupIdParam?: string, db: Db = getD
       lastUpdated: schema.accountStatuses.lastUpdated,
       totalAssets: schema.accountStatuses.totalAssets,
       scheduledWithdrawalAmount: schema.accountStatuses.scheduledWithdrawalAmount,
+      scheduledWithdrawalDate: schema.accountStatuses.scheduledWithdrawalDate,
       scheduledWithdrawalConfirmed: schema.accountStatuses.scheduledWithdrawalConfirmed,
       categoryId: schema.accounts.categoryId,
       categoryName: schema.institutionCategories.name,
