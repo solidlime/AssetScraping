@@ -148,4 +148,39 @@ describe("fixFallbackTransactions", () => {
     expect(rawCount(path, "SELECT COUNT(*) FROM transactions WHERE account_id = 'ion'")).toBe(4);
     expect(rawCount(path, "SELECT COUNT(*) FROM holdings WHERE liability_category IS NOT NULL")).toBe(2);
   });
+
+  it("--account-wide + --apply では external_id 付きの行も含めて対象口座の全行を削除する", () => {
+    const path = tempDbPath();
+    seed(path);
+    const sqlite = new BetterSqlite3(path);
+    // 本番の実測形（全行 external_id 付与済み）を再現する
+    sqlite
+      .prepare(
+        "INSERT INTO transactions (external_id, account_id, date, description, amount, type, is_transfer, is_excluded_from_calculation, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)",
+      )
+      .run("ssnb-tx:ion:2026-10-09:abc", "ion", "2026-10-09", "付与済み旧行", 700, "income", "2026-10-01", "2026-10-01");
+    sqlite.close();
+
+    const report = fixFallbackTransactions(path, "ion", { apply: true, accountWide: true });
+
+    expect(report.applied).toBe(true);
+    expect(report.abortedReason).toBeNull();
+    expect(report.transactionRows).toBe(4);
+    expect(report.nullExternalIdRows).toBe(3);
+    expect(rawCount(path, "SELECT COUNT(*) FROM transactions WHERE account_id = 'ion'")).toBe(0);
+    // 他口座は残る
+    expect(rawCount(path, "SELECT COUNT(*) FROM transactions WHERE external_id = 'kept-1'")).toBe(1);
+  });
+
+  it("--account-wide でも account_id が存在しなければ中断し 1 行も変更しない", () => {
+    const path = tempDbPath();
+    seed(path);
+
+    const report = fixFallbackTransactions(path, "typo-account", { apply: true, accountWide: true });
+
+    expect(report.applied).toBe(false);
+    expect(report.abortedReason).toContain("存在しない");
+    expect(rawCount(path, "SELECT COUNT(*) FROM transactions")).toBe(4);
+    expect(rawCount(path, "SELECT COUNT(*) FROM holdings WHERE liability_category IS NOT NULL")).toBe(2);
+  });
 });

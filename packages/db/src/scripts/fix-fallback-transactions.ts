@@ -12,12 +12,19 @@
  *   2. 対象行が「旧世代行（external_id IS NULL）と現行行の混在」→ 何も書かない
  *      （旧世代行だけ / 現行行だけ のどちらでもなく、混在のみ中断。現行行だけを消す事故を止める）
  *
+ * --account-wide（明示時のみ）: 対象口座の transactions を external_id の有無を問わず全削除する。
+ * 旧世代行が dedupeLegacyTransactions で external_id を付与済みだと旧世代/現行を識別できず、
+ * 安全弁 2 で永久に --apply できない DB（実測: 36 行すべてイオン銀行に誤帰属）のための最終手段。
+ * 安全弁 1（account_id の存在）は維持する。
+ *
  * 使い方:
  *   # 本番（Docker）: 既定は ./.data/asset-scraping.db なので --db を必ず明示する
  *   tsx src/scripts/fix-fallback-transactions.ts --db /data/asset-scraping.db --account-id <accounts.id>
  *   tsx src/scripts/fix-fallback-transactions.ts --db /data/asset-scraping.db --account-id <accounts.id> --apply
  *   # ローカル: --db 省略時は resolveDbPath()（既定 ./.data/asset-scraping.db）
  *   tsx src/scripts/fix-fallback-transactions.ts --account-id <accounts.id>
+ *   # 最終手段（口座の全取引を削除）
+ *   tsx src/scripts/fix-fallback-transactions.ts --db /data/asset-scraping.db --account-id <accounts.id> --account-wide --apply
  */
 import DatabaseConstructor from "better-sqlite3";
 import { pathToFileURL } from "node:url";
@@ -26,6 +33,11 @@ import { resolveDbPath } from "../client.js";
 export interface FixFallbackTransactionsOptions {
   /** false（既定）= dry-run。件数を数えるだけで一切変更しない */
   apply?: boolean;
+  /**
+   * false（既定）= external_id IS NULL の旧世代行だけを削除し、混在なら中断する。
+   * true = external_id の有無を問わず対象口座の全行を削除する（混在ガードを迂回）。
+   */
+  accountWide?: boolean;
 }
 
 export interface FixFallbackTransactionsReport {
@@ -53,6 +65,9 @@ export function fixFallbackTransactions(
   options: FixFallbackTransactionsOptions = {},
 ): FixFallbackTransactionsReport {
   const apply = options.apply ?? false;
+  const accountWide = options.accountWide ?? false;
+  // DELETE の条件はここ 1 箇所だけ。--account-wide の時だけ二重錠（external_id IS NULL）を外す
+  const deleteWhere = accountWide ? "account_id = ?" : "account_id = ? AND external_id IS NULL";
   const sqlite = new DatabaseConstructor(dbPath, { fileMustExist: true });
   try {
     const accountName =
@@ -77,8 +92,9 @@ export function fixFallbackTransactions(
     const abortedReason =
       accountName === null
         ? `account_id=${accountId} が accounts に存在しない`
-        : before.transactionRows > 0 && before.nullExternalIdRows !== before.transactionRows
-          ? `旧世代行（external_id IS NULL ${before.nullExternalIdRows} 行）と現行行が混在しているため中断した`
+        : !accountWide && before.transactionRows > 0 && before.nullExternalIdRows !== before.transactionRows
+          ? `旧世代行（external_id IS NULL ${before.nullExternalIdRows} 行）と現行行が混在しているため中断した` +
+            "。旧世代行が外部キー採番済みで識別できない場合は --account-wide（口座の全取引を削除）で抜けられる"
           : null;
 
     let applied = false;
@@ -86,10 +102,8 @@ export function fixFallbackTransactions(
       // 途中で落ちても半端な削除を残さない（DELETE と UPDATE を 1 トランザクションに）
       sqlite.exec("BEGIN IMMEDIATE");
       try {
-        // external_id IS NULL は混在ガードと同条件（ガードが緩んでも口座全削除に化けない二重錠）
-        sqlite
-          .prepare("DELETE FROM transactions WHERE account_id = ? AND external_id IS NULL")
-          .run(accountId);
+        // 既定の external_id IS NULL は混在ガードと同条件（ガードが緩んでも口座全削除に化けない二重錠）
+        sqlite.prepare(`DELETE FROM transactions WHERE ${deleteWhere}`).run(accountId);
         sqlite
           .prepare(
             "UPDATE holdings SET liability_category = NULL WHERE type = 'asset' AND liability_category IS NOT NULL",
@@ -122,15 +136,20 @@ function main(argv: string[]): number {
   const accountId = flagValue(argv, "--account-id");
   if (!accountId) {
     console.error(
-      "使い方: tsx src/scripts/fix-fallback-transactions.ts --db /data/asset-scraping.db --account-id <accounts.id> [--apply]",
+      "使い方: tsx src/scripts/fix-fallback-transactions.ts --db /data/asset-scraping.db --account-id <accounts.id> [--apply] [--account-wide]",
     );
     console.error(
       "      本番（Docker）は --db /data/asset-scraping.db を明示すること（既定は ./.data/asset-scraping.db）",
+    );
+    console.error(
+      "      --account-wide: external_id の有無を問わず対象口座の全 transactions を削除する。" +
+        "通常は使わない。旧世代行が externalId 付与済みで識別できない場合の最終手段",
     );
     return 1;
   }
   const dbPath = flagValue(argv, "--db") ?? resolveDbPath();
   const apply = argv.includes("--apply");
+  const accountWide = argv.includes("--account-wide");
 
   console.log(`DB: ${dbPath}`);
   if (flagValue(argv, "--db") === undefined) {
@@ -144,12 +163,24 @@ function main(argv: string[]): number {
   );
   console.log("（--apply の直前にこのコマンドで控えを取ること）");
 
-  const report = fixFallbackTransactions(dbPath, accountId, { apply });
+  const report = fixFallbackTransactions(dbPath, accountId, { apply, accountWide });
 
   console.log(`対象口座 name: ${report.accountName ?? "（見つからない）"}`);
   console.log(`削除対象 transactions: ${report.transactionRows} 行`);
   console.log(`うち external_id IS NULL: ${report.nullExternalIdRows} 行`);
+  console.log(
+    `うち external_id NOT NULL: ${report.transactionRows - report.nullExternalIdRows} 行`,
+  );
   console.log(`holdings.liability_category 非 NULL（type='asset' のみ）: ${report.holdingsLiabilityRows} 行`);
+
+  if (accountWide) {
+    console.warn("警告: --account-wide 指定。external_id の有無を問わず、対象口座の transactions 全行を削除する");
+    console.warn(
+      `      対象内訳: external_id IS NULL ${report.nullExternalIdRows} 行 / NOT NULL ${report.transactionRows - report.nullExternalIdRows} 行`,
+    );
+    console.warn("      通常は使わない。旧世代行が externalId 付与済みで識別できない場合の最終手段。取り違えると口座の全取引が消える");
+    console.warn(`      戻せるのはバックアップだけ: sqlite3 '${dbPath}' ".backup '${dbPath}.bak'"`);
+  }
 
   if (report.abortedReason !== null) {
     console.error(`中断: ${report.abortedReason}`);
