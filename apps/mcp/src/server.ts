@@ -86,7 +86,8 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     "get_account_alerts",
-    "口座警告（低残高・異常ステータス・クレカ引き落としの残高不足）を取得する",
+    "口座警告（低残高・異常ステータス・クレカ引き落としの残高不足）を取得する。" +
+      "引き落とし警告の判定口座名は withdrawalAccountName フィールドで返す（note には含まれない）。",
     {
       threshold: z.number().int().min(0).optional().describe("低残高しきい値（円）。省略時は DB 設定"),
       withdrawal_alert_days: z

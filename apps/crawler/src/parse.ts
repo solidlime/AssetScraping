@@ -17,9 +17,11 @@ import type {
   Holding,
   MonthlyCashFlowMonth,
   MonthlyCashFlowRow,
+  StoredAccountCategory,
   Transaction,
 } from "@asset-scraping/shared";
 import { ACCOUNT_CATEGORIES, buildTransactionExternalId } from "@asset-scraping/shared";
+import { todayJst } from "@asset-scraping/db";
 import { categorizeTransaction } from "./categorize.js";
 import { parse, NodeType, type Node, type HTMLElement as HtmlElement } from "node-html-parser";
 
@@ -30,7 +32,7 @@ export class ScrapeParseError extends Error {
   }
 }
 
-const CATEGORY_KEYWORDS: Array<[AccountCategory | "card", string[]]> = [
+const CATEGORY_KEYWORDS: Array<[StoredAccountCategory, string[]]> = [
   ["bank", ["銀行", "預金", "普通", "定期"]],
   // ACCOUNT_CATEGORIES（schema 影響大）には足さないが、accounts.category は text なので "card" は入る
   ["card", ["カード", "card"]],
@@ -42,9 +44,9 @@ const CATEGORY_KEYWORDS: Array<[AccountCategory | "card", string[]]> = [
   ["real_estate", ["不動産"]],
 ];
 
-export function guessCategory(text: string): AccountCategory {
+export function guessCategory(text: string): StoredAccountCategory {
   for (const [cat, keywords] of CATEGORY_KEYWORDS) {
-    if (keywords.some((k) => text.includes(k))) return cat as AccountCategory;
+    if (keywords.some((k) => text.includes(k))) return cat;
   }
   return "other";
 }
@@ -197,9 +199,7 @@ export interface ScheduledWithdrawal {
   date: string;
 }
 
-/** JST の今日 (YYYY-MM-DD)。crawler は date-utils に依存していないためここで済ませる */
-const todayJst = (now: Date = new Date()): string =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(now);
+/** JST の今日 (YYYY-MM-DD)
 
 /**
  * クレカ口座ページの「引き落とし予定額」列を集計する。実測（2026-10）:

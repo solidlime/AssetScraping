@@ -96,7 +96,8 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     for (const acc of accounts) {
       const html = await fetcher.fetch(SSNB_URLS.accountShow(acc.id));
       // F7: クレカ口座の「引き落とし予定額」列を拾う。非クレカは null（既存値をクリア）。
-      const withdrawal = parseScheduledWithdrawal(html);
+      // 判定窓をスナップショット日付と同一にするため日付を明示的に渡す
+      const withdrawal = parseScheduledWithdrawal(html, todayJst());
       saveScheduledWithdrawal(db, {
         accountId: acc.id,
         amount: withdrawal?.amount ?? null,

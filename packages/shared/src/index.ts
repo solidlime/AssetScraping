@@ -53,12 +53,18 @@ export const ACCOUNT_CATEGORIES = [
 
 export type AccountCategory = (typeof ACCOUNT_CATEGORIES)[number];
 
+/**
+ * DB（accounts.category は text）に実際に入り得る語彙。
+ * "card" は ssnb のクレカ口座を判別するためだけに使う（ACCOUNT_CATEGORIES の語彙は変えない）。
+ */
+export type StoredAccountCategory = AccountCategory | "card";
+
 /** 口座 */
 export interface Account {
   id: string;
   name: string;
   institution: string;
-  category: AccountCategory;
+  category: StoredAccountCategory;
 }
 
 /** 口座の現在残高 */

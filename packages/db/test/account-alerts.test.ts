@@ -218,6 +218,23 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
     expect(getWithdrawalAccountState(db)).toMatchObject({ status: "single", accountName: "青空銀行", balance: 200_000 });
   });
 
+  it("予定額だけを持つ行は category が未更新でもカードとして除外される（NAS 実 DB の現状）", () => {
+    // seedAccount は category="bank" を入れる。NAS 実 DB のクレカ口座は category が未更新のまま
+    // scheduledWithdrawalAmount だけが立っているので、isCardRow の "!== null" 単独経路を踏む。
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedAccount("card-1", "三井住友カード", "三井住友カード", 0);
+    db.update(schema.accountStatuses)
+      .set({ scheduledWithdrawalAmount: 75_267, scheduledWithdrawalDate: dayOffset(3) })
+      .where(eq(schema.accountStatuses.accountId, "card-1"))
+      .run();
+    // 未設定なら banks にカードが混ざらず「銀行1つ」で解決される
+    expect(getWithdrawalAccountState(db)).toMatchObject({ status: "single", accountName: "青空銀行", balance: 200_000 });
+    // 明示指定してもカード行なので弾かれ、自動解決に落ちる（偽の不足額を作らない）
+    setSetting(db, SETTING_KEYS.withdrawalAccountId, "card-1");
+    expect(getWithdrawalAccountState(db)).toMatchObject({ status: "single", accountName: "青空銀行", balance: 200_000 });
+    expect(scheduledKinds()).toHaveLength(0);
+  });
+
   it("存在しない口座 ID を指定されても自動解決に落ちる", () => {
     seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
     seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
