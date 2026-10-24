@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  guessCategory,
   parseAccountStatusKind,
   parseAccounts,
   parseAssetHistory,
@@ -761,6 +762,8 @@ describe("parseHoldings の銘柄コード取り込み（T011）", () => {
 });
 
 describe("parseScheduledWithdrawal（F7: クレカの引き落とし予定額列）", () => {
+  const TODAY = "2026-10-20";
+
   const cardPage = (rows: string) =>
     `<html><body>
       <table><tr><th>種類・名称</th><th>残高</th></tr><tr><td>三井住友カード</td><td>-75,267円</td></tr></table>
@@ -771,13 +774,14 @@ describe("parseScheduledWithdrawal（F7: クレカの引き落とし予定額列
     </body></html>`;
 
   it("td に金額と期日が連結されていても拾う（実測の形）", () => {
-    const result = parseScheduledWithdrawal(cardPage(`<tr><td>-44,200円 (2026/10/26)</td><td>100</td></tr>`));
+    const result = parseScheduledWithdrawal(cardPage(`<tr><td>-44,200円 (2026/10/26)</td><td>100</td></tr>`), TODAY);
     expect(result).toEqual({ amount: 44_200, date: "2026-10-26" });
   });
 
   it("期日が違う明細は最早期日ぶんだけ合算する（その日には落ちない金額を返さない）", () => {
     const result = parseScheduledWithdrawal(
       cardPage(`<tr><td>-44,200円 (2026/10/26)</td></tr><tr><td>-31,067円 (2026/10/27)</td></tr>`),
+      TODAY,
     );
     expect(result).toEqual({ amount: 44_200, date: "2026-10-26" });
   });
@@ -787,8 +791,18 @@ describe("parseScheduledWithdrawal（F7: クレカの引き落とし予定額列
       cardPage(
         `<tr><td>-44,200円 (2026/10/26)</td></tr><tr><td>-31,067円 (2026/10/26)</td></tr><tr><td>-1,000円 (2026/11/26)</td></tr>`,
       ),
+      TODAY,
     );
     expect(result).toEqual({ amount: 75_267, date: "2026-10-26" });
+  });
+
+  it("引き落とし済みの過去日が残っていても、今日以降の最早期日を返す（永久未警告の回避）", () => {
+    const html = cardPage(
+      `<tr><td>-44,200円 (2026/10/01)</td></tr><tr><td>-31,067円 (2026/11/27)</td></tr>`,
+    );
+    expect(parseScheduledWithdrawal(html, "2026-10-24")).toEqual({ amount: 31_067, date: "2026-11-27" });
+    // 明細が全て過去日なら最早期日にフォールバック（stale を null で潰さない）
+    expect(parseScheduledWithdrawal(html, "2026-12-01")).toEqual({ amount: 44_200, date: "2026-10-01" });
   });
 
   it("合計値があり明細合算と一致すれば通す（合計行は二重計上しない）", () => {
@@ -820,10 +834,24 @@ describe("parseScheduledWithdrawal（F7: クレカの引き落とし予定額列
   });
 
   it("未定（全セル −）は null（誤警告より無警告）", () => {
-    expect(parseScheduledWithdrawal(cardPage(`<tr><td>−</td><td>100</td></tr>`))).toBeNull();
+    expect(parseScheduledWithdrawal(cardPage(`<tr><td>−</td><td>100</td></tr>`), TODAY)).toBeNull();
   });
 
   it("金額だけで期日が無ければ null", () => {
-    expect(parseScheduledWithdrawal(cardPage(`<tr><td>-44,200円</td></tr>`))).toBeNull();
+    expect(parseScheduledWithdrawal(cardPage(`<tr><td>-44,200円</td></tr>`), TODAY)).toBeNull();
+  });
+});
+
+describe("guessCategory（口座カテゴリ推定）", () => {
+  it("カード系の名称は card を返す（ACCOUNT_CATEGORIES には足さず accounts.category=text に入れる）", () => {
+    expect(guessCategory("三井住友カード")).toBe("card");
+    expect(guessCategory("PayPayカード")).toBe("card");
+  });
+
+  it("既存の推定結果は変わらない", () => {
+    expect(guessCategory("イオン銀行")).toBe("bank");
+    expect(guessCategory("SBI 証券")).toBe("securities");
+    expect(guessCategory("ポイント")).toBe("point");
+    expect(guessCategory("よくわからん")).toBe("other");
   });
 });

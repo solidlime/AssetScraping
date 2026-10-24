@@ -110,11 +110,12 @@ export function setWithdrawalAlertDays(db: Database, value: number): void {
 /** F7: 引き落とし口座（残高と比べる口座）の ID。未設定は null */
 export function getWithdrawalAccountId(db: Database): string | null {
   const raw = getSetting(db, SETTING_KEYS.withdrawalAccountId);
-  return raw === null || raw === "" ? null : raw;
+  return raw === null || raw === "" || raw === "none" ? null : raw;
 }
 
 export function setWithdrawalAccountId(db: Database, accountId: string | null): void {
-  setSetting(db, SETTING_KEYS.withdrawalAccountId, accountId ?? "");
+  // セレクトの「未設定」センチネルがそのまま DB に入らないよう吸収する
+  setSetting(db, SETTING_KEYS.withdrawalAccountId, accountId === null || accountId === "none" ? "" : accountId);
 }
 
 /**

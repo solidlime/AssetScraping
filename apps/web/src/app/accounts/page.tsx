@@ -70,14 +70,17 @@ export default async function AccountsPage() {
           </CardContent>
         </Card>
       )}
-      {withdrawalAccount.status === "ambiguous" && (
+      {(withdrawalAccount.status === "ambiguous" || withdrawalAccount.status === "none") && (
         <Card className="mb-6">
           <CardHeader>
             <CardTitle icon={CreditCard}>引き落とし口座が未設定です</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              銀行口座が複数あるため、引き落とし残高の比較に使う口座が決まっていません。設定タブで「引き落とし口座」を選ぶと警告を出します。
+              {withdrawalAccount.status === "ambiguous"
+                ? "銀行口座が複数あるため、引き落とし残高の比較に使う口座が決まっていません。"
+                : "銀行系の口座が見つからないため、引き落とし残高の比較ができません。"}
+              設定タブで「引き落とし口座」を選ぶと警告を出します。
             </p>
           </CardContent>
         </Card>

@@ -65,15 +65,22 @@ export interface WithdrawalAccountState {
   balance: number | null;
 }
 
-/** 銀行系口座か。カード自身（負債）は判定残高に混ぜない */
+/** 引き落とし予定を持つ行 or category="card" はクレカ。カード自身の負債残高を判定に混ぜない */
+const isCardRow = (row: AlertRow): boolean =>
+  row.scheduledWithdrawalAmount !== null || row.category === "card";
+
+/** 銀行系口座か。カードは明示的に除外する */
 function isBankRow(row: AlertRow): boolean {
-  if (row.category === "card") return false;
-  return row.categoryName === "銀行" || row.category === "bank";
+  return !isCardRow(row) && (row.categoryName === "銀行" || row.category === "bank");
 }
 
+/**
+ * 引き落とし口座を決める。明示指定が存在しない/カード行なら無視して自動解決に落とす
+ * （MCP・API から任意の口座 ID を渡されて嘘の不足額を作られるのを防ぐ）
+ */
 function resolveWithdrawalAccount(rows: AlertRow[], withdrawalAccountId: string | null): WithdrawalAccountState {
   const configured = withdrawalAccountId
-    ? rows.find((row) => row.accountId === withdrawalAccountId && row.category !== "card")
+    ? rows.find((row) => row.accountId === withdrawalAccountId && !isCardRow(row))
     : undefined;
   if (configured) {
     return {
@@ -108,10 +115,8 @@ function buildScheduledWithdrawalAlerts(
   const source = resolveWithdrawalAccount(rows, opts.withdrawalAccountId);
   const available = source.balance;
   if (available === null || source.accountId === null) return [];
-  const note =
-    source.status === "single"
-      ? `（引き落とし口座は未設定のため「${source.accountName}」で判定）`
-      : undefined;
+  // 口座名は warning 側の withdrawalAccountName / 本文で出す（ここで重ねて出さない）
+  const note = source.status === "single" ? "（引き落とし口座が未設定のため自動判定）" : undefined;
 
   return scheduled
     .filter((row) => {

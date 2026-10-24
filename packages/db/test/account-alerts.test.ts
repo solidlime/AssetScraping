@@ -7,9 +7,11 @@ import { todayJst, saveScheduledWithdrawal } from "../src/repo.js";
 import { getAccountAlerts, getWithdrawalAccountState, type AccountAlert } from "../src/repositories/alerts.js";
 import {
   DEFAULT_WITHDRAWAL_ALERT_DAYS,
+  getWithdrawalAccountId,
   getWithdrawalAlertDays,
   SETTING_KEYS,
   setSetting,
+  setWithdrawalAccountId,
   setWithdrawalAlertDays,
 } from "../src/repositories/settings.js";
 
@@ -207,6 +209,29 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
     expect(scheduledKinds()).toHaveLength(1);
   });
 
+  it("withdrawal_account_id にカード口座を指定されても無視する（存在しない不足額を作らない）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    setSetting(db, SETTING_KEYS.withdrawalAccountId, "card-1");
+    // カードの残高で判定すると 75,267 - 0 = 75,267 の嘘が出る。自動解決（銀行1つ）に落ちて足りる
+    expect(scheduledKinds()).toHaveLength(0);
+    expect(getWithdrawalAccountState(db)).toMatchObject({ status: "single", accountName: "青空銀行", balance: 200_000 });
+  });
+
+  it("存在しない口座 ID を指定されても自動解決に落ちる", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    setSetting(db, SETTING_KEYS.withdrawalAccountId, "no-such-account");
+    const alert = scheduledKinds()[0];
+    expect(alert?.balance).toBe(30_000);
+    expect(alert?.shortage).toBe(45_267);
+  });
+
+  it("セレクトの「未設定」センチネル (\"none\") は null として保存される", () => {
+    setWithdrawalAccountId(db, "none");
+    expect(getWithdrawalAccountId(db)).toBeNull();
+  });
+
   it("institution_categories が未充填でも accounts.category=\"bank\" の残高で判定する（本番 DB の実態）", () => {
     // カテゴリマスタを作らずに銀行を seed（NAS 実 DB と同じ状況）。銀行が1つなので既定で使う
     seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
@@ -222,7 +247,9 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
     seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
     const alert = scheduledKinds()[0];
     expect(alert?.withdrawalAccountName).toBe("青空銀行");
-    expect(alert?.note).toContain("引き落とし口座は未設定");
+    // G: 口座名は withdrawalAccountName 側だけで出す（note に重ねない）
+    expect(alert?.note).toBe("（引き落とし口座が未設定のため自動判定）");
+    expect(alert?.note).not.toContain("青空銀行");
   });
 
   it("未設定で銀行が複数なら警告しない（合算しない・未設定状態を返す）", () => {

@@ -30,8 +30,10 @@ export class ScrapeParseError extends Error {
   }
 }
 
-const CATEGORY_KEYWORDS: Array<[AccountCategory, string[]]> = [
+const CATEGORY_KEYWORDS: Array<[AccountCategory | "card", string[]]> = [
   ["bank", ["銀行", "預金", "普通", "定期"]],
+  // ACCOUNT_CATEGORIES（schema 影響大）には足さないが、accounts.category は text なので "card" は入る
+  ["card", ["カード", "card"]],
   ["securities", ["証券", "投信", "投資信託", "株", "ETF"]],
   ["cash", ["現金", "wallet"]],
   ["point", ["ポイント"]],
@@ -42,7 +44,7 @@ const CATEGORY_KEYWORDS: Array<[AccountCategory, string[]]> = [
 
 export function guessCategory(text: string): AccountCategory {
   for (const [cat, keywords] of CATEGORY_KEYWORDS) {
-    if (keywords.some((k) => text.includes(k))) return cat;
+    if (keywords.some((k) => text.includes(k))) return cat as AccountCategory;
   }
   return "other";
 }
@@ -195,6 +197,10 @@ export interface ScheduledWithdrawal {
   date: string;
 }
 
+/** JST の今日 (YYYY-MM-DD)。crawler は date-utils に依存していないためここで済ませる */
+const todayJst = (now: Date = new Date()): string =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(now);
+
 /**
  * クレカ口座ページの「引き落とし予定額」列を集計する。実測（2026-10）:
  * - サマリーに「引き落とし予定額合計：-75,267円」、行は td に「-44,200円 (2026/10/26)」の連結
@@ -202,10 +208,11 @@ export interface ScheduledWithdrawal {
  * - 同じページにポイント／負債／収入・支出詳細の表が同居するため、列見出しで表を特定する
  * 金額と期日が揃わない場合は null（誤警告より無警告）。
  *
- * 期日ごとに金額を分け、**最も早い期日ぶんだけ**を返す（全明細を合算すると
- * 「その日には落ちない金額」を返すことになる。N 日の窓では最早期日より後は判定対象外）。
+ * 期日ごとに金額を分け、**今日以降で最も早い期日ぶんだけ**を返す。全明細を合算すると
+ * 「その日には落ちない金額」を返すことになる。引き落とし済みの明細がページに残るので、
+ * 最早期日ではなく「今日以降の最早期日」を選ばないと翌月の引き落としが永久に警告されない。
  */
-export function parseScheduledWithdrawal(html: string): ScheduledWithdrawal | null {
+export function parseScheduledWithdrawal(html: string, today: string = todayJst()): ScheduledWithdrawal | null {
   const root = parse(html);
   const table = root
     .querySelectorAll("table")
@@ -214,8 +221,8 @@ export function parseScheduledWithdrawal(html: string): ScheduledWithdrawal | nu
 
   const byDate = new Map<string, number>();
   for (const row of table.querySelectorAll("tr")) {
-    // 合計行（「引き落とし予定額合計」）は明細ではないので拾わない
-    if (cellText(row).includes("合計")) continue;
+    // 合計行（「引き落とし予定額合計」）は明細ではないので拾わない。商品名の「合計」を落とさないよう先頭一致
+    if (/^合計/.test(cellText(row))) continue;
     for (const cell of row.querySelectorAll("td")) {
       const text = cellText(cell);
       const yen = parseYen(text);
@@ -225,12 +232,14 @@ export function parseScheduledWithdrawal(html: string): ScheduledWithdrawal | nu
     }
   }
 
-  const date = [...byDate.keys()].sort()[0];
+  const dates = [...byDate.keys()].sort();
+  const date = dates.find((d) => d >= today) ?? dates[0];
   const amount = date === undefined ? 0 : byDate.get(date)!;
   if (date === undefined || amount <= 0) return null;
 
   // 合計値がページにあれば明細合算と突き合わせる。食い違う＝抽出が壊れている
   // （行の取りこぼし・合計行の二重計上）ので、金額を信じず null＝無警告に倒す。
+  // shortcut: 合計の文言が変わると検算されない, 文言変更を検知したら必須化
   const totalText = /引き落とし予定額合計[：:]\s*([^\n]{0,24})/.exec(cellText(root.querySelector("body")))?.[1] ?? "";
   if (totalText.includes("未定")) return null;
   const total = parseYen(totalText);

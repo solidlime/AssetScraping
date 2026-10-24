@@ -82,6 +82,8 @@ export async function getAccountsWithAssets(groupIdParam?: string, db: Db = getD
       scheduledWithdrawalDate: schema.accountStatuses.scheduledWithdrawalDate,
       scheduledWithdrawalConfirmed: schema.accountStatuses.scheduledWithdrawalConfirmed,
       categoryId: schema.accounts.categoryId,
+      // 本番 DB は institution_categories が空・category_id が全件 NULL のため category 列も返す
+      category: schema.accounts.category,
       categoryName: schema.institutionCategories.name,
       categoryDisplayOrder: schema.institutionCategories.displayOrder,
     })

@@ -14,6 +14,8 @@ type AccountCardProps = {
   totalAssets: number;
   /** カテゴリ名（未分類は "未分類"） — クレカカード判定に使う */
   categoryName: string;
+  /** accounts.category（"bank" / "card" 等）。本番 DB は category_id が未充填のためこちらで判定する */
+  category?: string;
   /** F7: クレカの引き落とし予定額（正値） */
   scheduledWithdrawalAmount?: number | null;
   /** F7: 引き落とし予定日 (YYYY-MM-DD) */
@@ -28,6 +30,7 @@ export function AccountCard({
   lastUpdated,
   totalAssets,
   categoryName,
+  category,
   scheduledWithdrawalAmount,
   scheduledWithdrawalDate,
 }: AccountCardProps) {
@@ -56,7 +59,7 @@ export function AccountCard({
           </div>
         ) : (
           // クレカで予定額が取れていない場合、「警告なし」と区別できるよう状態だけ出す（数字は出さない）
-          categoryName === "カード" && (
+          (categoryName === "カード" || category === "card") && (
             <div className="mb-3 text-sm text-muted-foreground">引落予定：未定</div>
           )
         )}

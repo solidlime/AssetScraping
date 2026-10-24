@@ -11,10 +11,12 @@ export const metadata: Metadata = {
 };
 
 export default async function SettingsPage() {
-  // F7: 引き落とし口座に選べるのは銀行系口座（カード自身の負債残高は判定に使わない）
+  // F7: 引き落とし口座に選べるのは銀行系口座（カード自身の負債残高は判定に使わない）。
+  // 本番 DB は institution_categories が空なので accounts.category も見る
   const withdrawalAccounts = (await getAccountsGroupedByCategory())
-    .filter((group) => group.categoryName === "銀行")
-    .flatMap((group) => group.accounts.map((a) => ({ id: a.id, name: a.name })));
+    .flatMap((group) => group.accounts)
+    .filter((a) => a.category !== "card" && (a.categoryName === "銀行" || a.category === "bank"))
+    .map((a) => ({ id: a.id, name: a.name }));
 
   return (
     <PageLayout title="設定" options={<RefreshButton />}>

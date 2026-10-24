@@ -65,6 +65,7 @@ export function AccountListClient({ groupedAccounts }: AccountListClientProps) {
                     lastUpdated={account.lastUpdated}
                     totalAssets={account.totalAssets}
                     categoryName={account.categoryName}
+                    category={account.category}
                     scheduledWithdrawalAmount={account.scheduledWithdrawalAmount}
                     scheduledWithdrawalDate={account.scheduledWithdrawalDate}
                   />
