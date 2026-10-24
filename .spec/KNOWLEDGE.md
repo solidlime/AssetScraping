@@ -49,3 +49,10 @@
 - **Portainer の `stack_update`（pull_image:true）は1回で pull のみで終わり、コンテナが再作成されないことがある**。ImageID を必ず突き合わせ、変わっていなければ2回目を実行する
 - 検証の罠: `cmd | tail -3; echo $?` は **`tail` の終了コード**を拾う。終了コードを見たいときはパイプを使わない
 - vitest は `--no-file-parallelism` を付けると安定する（過去に並列実行でフレーク）
+
+## 技術的な知見（F7: クレカ引き落とし警告）
+- **カード口座の判定は `scheduledWithdrawalAmount !== null` が唯一の防波堤**。`accounts.category` は再スクレイプまで `"other"`/未更新のことがあり、`category === "card"` 単独では機能しない。`packages/db/src/repositories/alerts.ts` の `isCardRow` は両方の OR を保つこと
+- **不変条件（未証明）**: 「引き落とし予定額を持つ行＝カード」。ssnb が予定額列をカード詳細ページにしか出さないという実測前提に依存する。銀行のローン引落に同列が出ると、その銀行が判定口座から外れ `status: "none"` の誤案内または無意味な比較警告になる（倒れる方向は無警告側）
+- **引き落とし日が全明細で過去日なら最新の過去日を採用**する設計（フェイルセーフ）。`remaining >= 0` で無警告に倒れる。代償として、次月以降の明細がカードページに出るまで警告が出ない
+- `Account.category`（`packages/shared`）は `StoredAccountCategory = AccountCategory | "card"`。DB の `accounts.category` は text 列で enum 制約なし、`ACCOUNT_CATEGORIES` は DB スキーマ語彙なので `"card"` は含めない
+- `todayJst()` は `@asset-scraping/db` の実装を一本化して使う（crawler にローカル実装を置かない。`Intl` 依存を crawler の本経路から消すため）

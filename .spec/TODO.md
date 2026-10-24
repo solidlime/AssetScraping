@@ -19,6 +19,13 @@
 - [x] T015: web — `/dividends` ページ（今月の見込み／12ヶ月カレンダー／去年vs今年／銘柄別内訳／未解決一覧＋手動設定）　※`9be147a` + `eaca06f`
 - [x] T016: 検証 — typecheck・build・テスト・NAS 反映後の実データ確認とスクショ　※NAS 実データで判定6項目すべて合格（今月見込み 66,136円＝実績59,136+推定7,000／`563A`=26,400円・`408A`=6,600円・`314A`=0円 が「自動（Yahoo）」／四半期払いの KO/VYM/SPYD は当月不加算／react418=0）
 
+## 優先度：高（F7: クレカ引き落とし警告）
+- [x] T017: crawler — カード詳細ページから引き落とし予定額・引き落とし日を取得（`parseScheduledWithdrawal`、期日ごとグルーピングと合計突き合わせ）　※`guessCategory` に `card` を追加（bank → card → 以降据え置き）
+- [x] T018: db — `accounts.scheduled_withdrawal_amount` / `scheduled_withdrawal_date` / `scheduled_withdrawal_confirmed` 列とアラート判定（`resolveWithdrawalAccount` で `set`/`single`/`ambiguous`/`none` を解決、カード行を判定口座から除外）　※`aa509ba` + `2d45e63`
+- [x] T019: web — 口座カードに引き落とし予定を表示、`/settings` に判定口座と警告しきい値の入力
+- [x] T020: mcp — `get_account_alerts` に `scheduled_withdrawal` kind を追加（後方互換、判定口座名は `withdrawalAccountName`）
+- [x] T021: 検証 — typecheck / db 135 / crawler 111 / web 8 passed、ルアン・メェイのレビュー PASS
+
 ## 優先度：中
 - [ ] T010: README・ドキュメント整備
 
