@@ -10,6 +10,9 @@ export const metadata: Metadata = {
   title: "設定",
 };
 
+// DB（口座一覧）を読むのでビルド時に prerender させない
+export const dynamic = "force-dynamic";
+
 export default async function SettingsPage() {
   // F7: 引き落とし口座に選べるのは銀行系口座（カード自身の負債残高は判定に使わない）。
   // 本番 DB は institution_categories が空なので accounts.category も見る
