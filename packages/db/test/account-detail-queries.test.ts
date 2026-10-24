@@ -6,6 +6,7 @@
  * 混ざらないこと、グループ外の口座では空になることを担保する。
  */
 import BetterSqlite3 from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,7 @@ import { createHolding, saveHoldingValue } from "../src/repositories/holdings.js
 import { saveTransaction } from "../src/repositories/transactions.js";
 import { getOrCreateCategory } from "../src/repositories/categories.js";
 import { getHoldingsByAccountId } from "../src/queries/holding.js";
+import { getAccountByMfId } from "../src/queries/account.js";
 import { getTransactionsByAccountId } from "../src/queries/transaction.js";
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -151,5 +153,106 @@ describe("口座で絞るクエリ", () => {
     // グループにリンクしない
     expect(await getHoldingsByAccountId(acc, undefined, db)).toEqual([]);
     expect(await getTransactionsByAccountId(acc, undefined, db)).toEqual([]);
+  });
+
+  it("getAccountByMfId は引き落とし予定額・予定日・card 判定用の列を返す", async () => {
+    const db = freshDb();
+    upsertGroup(db, { id: "0", name: "グループ選択なし", isCurrent: true });
+    const acc = upsertAccount(db, {
+      mfId: "acc-card",
+      name: "楽天カード",
+      type: "自動連携",
+      status: "ok",
+      lastUpdated: NOW,
+      url: "",
+      totalAssets: 0,
+    });
+    linkAccountToGroup(db, "0", acc);
+    db.update(schema.accounts).set({ category: "card" }).where(eq(schema.accounts.id, acc)).run();
+    db.insert(schema.accountStatuses)
+      .values({
+        accountId: acc,
+        balance: 0,
+        scrapedAt: NOW,
+        status: "ok",
+        lastUpdated: NOW,
+        totalAssets: 0,
+        scheduledWithdrawalAmount: 89655,
+        scheduledWithdrawalDate: "2026-10-27",
+        scheduledWithdrawalConfirmed: true,
+      })
+      .run();
+
+    const account = await getAccountByMfId("acc-card", undefined, db);
+    expect(account).toMatchObject({
+      category: "card",
+      institution: "楽天カード",
+      scheduledWithdrawalAmount: 89655,
+      scheduledWithdrawalDate: "2026-10-27",
+      scheduledWithdrawalConfirmed: true,
+      withdrawalAccountId: null,
+    });
+  });
+
+  it("getTransactionsByAccountId は DB の金額をそのまま返し subCategory も返す", async () => {
+    const db = freshDb();
+    upsertGroup(db, { id: "0", name: "グループ選択なし", isCurrent: true });
+    const acc = upsertAccount(db, {
+      mfId: "acc-cash",
+      name: "楽天カード",
+      type: "自動連携",
+      status: "ok",
+      lastUpdated: NOW,
+      url: "",
+      totalAssets: 0,
+    });
+    linkAccountToGroup(db, "0", acc);
+
+    const accountIdMap = buildAccountIdMap(db);
+    // 保存は正値 + type（crawler と同じ形）
+    saveTransaction(
+      db,
+      {
+        mfId: "tx-expense",
+        date: "2026-10-05",
+        category: "食費",
+        subCategory: "コンビニ",
+        description: "セブンイレブン",
+        amount: 2000,
+        type: "expense",
+        isTransfer: false,
+        isExcludedFromCalculation: false,
+        accountName: "楽天カード",
+      },
+      accountIdMap,
+    );
+    saveTransaction(
+      db,
+      {
+        mfId: "tx-income",
+        date: "2026-10-06",
+        category: "収入",
+        subCategory: null,
+        description: "給与",
+        amount: 300000,
+        type: "income",
+        isTransfer: false,
+        isExcludedFromCalculation: false,
+        accountName: "楽天カード",
+      },
+      accountIdMap,
+    );
+
+    const rows = await getTransactionsByAccountId(acc, undefined, db);
+    // 符号は DB の値そのまま（一覧の getMfTransactions と同じ）。反転は AmountDisplay/type で扱う
+    expect(rows.find((t) => t.mfId === "tx-expense")).toMatchObject({
+      amount: 2000,
+      type: "expense",
+      subCategory: "コンビニ",
+    });
+    expect(rows.find((t) => t.mfId === "tx-income")).toMatchObject({
+      amount: 300000,
+      subCategory: null,
+    });
   });
 });

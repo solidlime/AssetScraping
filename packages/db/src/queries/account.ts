@@ -141,6 +141,12 @@ export async function getAccountByMfId(mfId: string, groupIdParam?: string, db: 
       lastUpdated: schema.accountStatuses.lastUpdated,
       totalAssets: schema.accountStatuses.totalAssets,
       errorMessage: schema.accountStatuses.errorMessage,
+      scheduledWithdrawalAmount: schema.accountStatuses.scheduledWithdrawalAmount,
+      scheduledWithdrawalDate: schema.accountStatuses.scheduledWithdrawalDate,
+      scheduledWithdrawalConfirmed: schema.accountStatuses.scheduledWithdrawalConfirmed,
+      withdrawalAccountId: schema.accounts.withdrawalAccountId,
+      institution: schema.accounts.institution,
+      category: schema.accounts.category,
       categoryName: schema.institutionCategories.name,
     })
     .from(schema.accounts)
@@ -164,6 +170,12 @@ export async function getAccountByMfId(mfId: string, groupIdParam?: string, db: 
     totalAssets: account.totalAssets ?? 0,
     errorMessage: account.errorMessage ?? null,
     categoryName: account.categoryName ?? "未分類",
+    scheduledWithdrawalAmount: account.scheduledWithdrawalAmount ?? null,
+    scheduledWithdrawalDate: account.scheduledWithdrawalDate ?? null,
+    scheduledWithdrawalConfirmed: account.scheduledWithdrawalConfirmed ?? false,
+    withdrawalAccountId: account.withdrawalAccountId ?? null,
+    institution: account.institution,
+    category: account.category,
   };
 }
 

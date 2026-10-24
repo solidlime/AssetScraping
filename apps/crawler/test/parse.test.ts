@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   guessCategory,
   parseAccountStatusKind,
@@ -27,6 +27,16 @@ describe("parseYen（円必須）", () => {
     expect(parseYen("31")).toBeNull();
     expect(parseYen("")).toBeNull();
   });
+
+  it("全角マイナス U+2212 を負値として読む（MF の描画は −）", () => {
+    // 実測: MF はマイナスを U+2212 で描画する。読めないと -345,873 が +345873 に化ける
+    expect(parseYen("−345,873円")).toBe(-345873);
+  });
+
+  it("表記ゆれのマイナス U+FF0D（全角ハイフン）/ U+2013（en dash）も負値として読む", () => {
+    expect(parseYen("－345,873円")).toBe(-345873);
+    expect(parseYen("–345,873円")).toBe(-345873);
+  });
 });
 
 describe("parseYenLoose（円なし許容）", () => {
@@ -41,6 +51,15 @@ describe("parseYenLoose（円なし許容）", () => {
     expect(parseYenLoose("")).toBeNull();
     expect(parseYenLoose("(振替)")).toBeNull();
     expect(parseYenLoose("振替")).toBeNull();
+  });
+
+  it("全角マイナス U+2212 を負値として読む", () => {
+    expect(parseYenLoose("−22,000円")).toBe(-22000);
+  });
+
+  it("表記ゆれのマイナス U+FF0D / U+2013 も読む", () => {
+    expect(parseYenLoose("－22,000")).toBe(-22000);
+    expect(parseYenLoose("–22,000")).toBe(-22000);
   });
 });
 
@@ -259,6 +278,26 @@ describe("parseHoldings（/accounts/show/{id} の「種類・名称」テーブ�
 
   it("種類・名称テーブルが無いページ（tmp 側の情報系テーブルだけ）は空配列", () => {
     expect(parseHoldings("<table><tr><th>月</th><td>10月</td></tr></table>", "acc-1")).toEqual([]);
+  });
+
+  it("カード口座の「ご利用残高」行も他の行と同じく assetCategory だけで扱う（liabilityCategory は廃止）", () => {
+    const cardHtml = `
+    <table>
+      <thead><tr><th>種類・名称</th><th>残高</th></tr></thead>
+      <tbody>
+        <tr><td>ご利用残高（T1）</td><td>-345,873円</td></tr>
+        <tr><td>ご利用残高（T2）</td><td>-12,000円</td></tr>
+        <tr><td>ポイント</td><td>1,234円</td></tr>
+      </tbody>
+    </table>`;
+    const card = parseHoldings(cardHtml, "cc-1", { accountName: "三井住友カード" });
+    expect(card.map((h) => h.name)).toEqual([
+      "ご利用残高（T1）",
+      "ご利用残高（T2）",
+      "ポイント",
+    ]);
+    // liabilityCategory は型ごと削除（holdings-table の表示経路が無かった死んだデータ）
+    expect(card.every((h) => !("liabilityCategory" in h))).toBe(true);
   });
 
   it("集約テーブル（種類・名称）と内訳テーブル（名称）が併存しても、後発テーブルの同一金額行を二重計上しない", () => {
@@ -579,79 +618,235 @@ describe("parseAssetHistory（/bs/history の資産推移テーブル）", () =>
 });
 
 describe("parseTransactions（/cf の取引明細テーブル）", () => {
+  // 本番 DB 実測の accounts.name（2026-10）。<金融機関名> ( 本サイト ) <番号> 形式
+  const REAL_ACCOUNTS = [
+    { id: "rakuten-card", name: "楽天カード ( 本サイト ) sol******" },
+    { id: "smcc", name: "三井住友カード (VpassID) ( 本サイト ) sol******" },
+    { id: "paypay", name: "PayPayカード ( 本サイト ) 080********" },
+    { id: "ion-bank", name: "イオン銀行 ( 本サイト ) 007*******" },
+    { id: "smbc", name: "三井住友銀行 ( 本サイト ) 044**********" },
+    { id: "rakuten-bank", name: "楽天銀行 ( 本サイト ) 225**********" },
+    { id: "rakuten-ichiba", name: "楽天市場(my Rakuten) ( 本サイト ) sol******" },
+    // 実測 name をそのまま入れる（架空の短縮名で「解決しない」を固定すると偽の安心になる）
+    { id: "sbi-shinsei", name: "SBI新生銀行 ( 本サイト ) 300************" },
+    { id: "hokuriku-bank", name: "北國銀行 ( 本サイト ) 306*************************************" },
+    { id: "hokuriku-rokin", name: "北陸労働金庫 ( 本サイト ) 213**" },
+    { id: "sbi-sec", name: "SBI証券 ( 本サイト ) sol******" },
+    { id: "sbi-benefit", name: "SBIベネフィットシステムズ ( 本サイト ) 127*******" },
+  ];
+  // 実測の保有金融機関セル: 楽天カード / 三井住友カード (VpassID) / イオン銀行
   const html = `
   <html><body>
   <table><tr><th>口座</th><td>dummy</td></tr></table>
   <table class="table table-hover">
     <thead><tr><th>計算対象</th><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th><th>大項目</th><th>中項目</th><th>メモ</th><th>振替</th><th>削除</th></tr></thead>
     <tbody>
-      <tr><td><input type="checkbox"></td><td>10/02(金)</td><td>スーパー</td><td>-22,000\n(振替)</td><td>三井住友カード</td><td>食費</td><td>食料品</td><td></td><td><input type="checkbox"></td><td></td></tr>
+      <tr><td><input type="checkbox"></td><td>10/02(金)</td><td>スーパー</td><td>-22,000\n(振替)</td><td>三井住友カード (VpassID)</td><td>食費</td><td>食料品</td><td></td><td><input type="checkbox"></td><td></td></tr>
       <tr><td><input type="checkbox"></td><td>10/05(月)</td><td>給与</td><td>300,000</td><td>イオン銀行</td><td>収入</td><td>給与</td><td></td><td></td><td></td></tr>
-      <tr><td><input type="checkbox"></td><td>10/06(火)</td><td>口座間振替</td><td>-50,000\n(振替)</td><td>イオン銀行</td><td></td><td></td><td></td><td><input type="checkbox"></td><td></td></tr>
+      <tr><td><input type="checkbox"></td><td>10/06(火)</td><td>口座間振替</td><td>-50,000\n(振替)</td><td>楽天カード</td><td></td><td></td><td></td><td><input type="checkbox"></td><td></td></tr>
     </tbody>
   </table>
   <table><tr><th>合計</th><td>228,000円</td></tr></table>
   </body></html>`;
 
   it("実測列配置（日付=td[1]・内容=td[2]・金額=td[3]・大/中項目）で parse する", () => {
-    const txs = parseTransactions(html, "acc-1", new Date(2026, 9, 9));
+    const txs = parseTransactions(html, REAL_ACCOUNTS, new Date(2026, 9, 9));
     expect(txs).toEqual([
       {
         externalId: expect.any(String),
-        accountId: "acc-1",
+        accountId: "smcc",
         date: "2026-10-02",
         description: "スーパー",
         amount: -22000,
-        category: "食費 / 食料品",
+        // 中項目は category に連結しない（本家の category / sub_category 分離に合わせる）
+        category: "食費",
         subCategory: "食料品",
+        isTransfer: true,
+        transferTarget: "三井住友カード (VpassID)",
       },
       {
         externalId: expect.any(String),
-        accountId: "acc-1",
+        accountId: "ion-bank",
         date: "2026-10-05",
         description: "給与",
         amount: 300000,
-        category: "収入 / 給与",
+        category: "収入",
         subCategory: "給与",
+        isTransfer: false,
+        transferTarget: null,
       },
       {
         externalId: expect.any(String),
-        accountId: "acc-1",
+        accountId: "rakuten-card",
         date: "2026-10-06",
         description: "口座間振替",
         amount: -50000,
         category: null,
         subCategory: null,
+        isTransfer: true,
+        transferTarget: "楽天カード",
       },
     ]);
   });
 
+  it("実測の保有金融機関セルを 7 行すべて解決し、6 口座に振り分ける（warn 0）", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // 実測の保有金融機関セルは 7 行。楽天カードの 2 variant が両方この fixture にあり、
+    // bare な「三井住友カード (VpassID)」行は別 it（上の実測列配置テスト）が担う。イオン銀行は /cf に現れない
+    const realHtml = `
+    <table class="table table-hover">
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th></tr></thead>
+      <tbody>
+        <tr><td>10/02(金)</td><td>楽天市場</td><td>-1,000</td><td>楽天カード</td></tr>
+        <tr><td>10/03(土)</td><td>楽天ポイント</td><td>500</td><td>楽天カード<br>楽天市場(my Rakuten)</td></tr>
+        <tr><td>10/04(日)</td><td>振込</td><td>-30,000</td><td>SBI新生銀行</td></tr>
+        <tr><td>10/05(月)</td><td>ATM</td><td>-3,000</td><td>北國銀行</td></tr>
+        <tr><td>10/06(火)</td><td>融資返済</td><td>-20,000</td><td>北陸労働金庫</td></tr>
+        <tr><td>10/07(水)</td><td>未設定カード</td><td>-800</td><td>三井住友カード (VpassID)<br>未設定</td></tr>
+        <tr><td>10/08(木)</td><td>PayPay残高</td><td>-900</td><td>PayPayカード</td></tr>
+      </tbody>
+    </table>`;
+    const rows = parseTransactions(realHtml, REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(rows.map((t) => t.description)).toEqual([
+      "楽天市場",
+      "楽天ポイント",
+      "振込",
+      "ATM",
+      "融資返済",
+      "未設定カード",
+      "PayPay残高",
+    ]);
+    expect(rows.map((t) => t.accountId)).toEqual([
+      "rakuten-card",
+      "rakuten-card",
+      "sbi-shinsei",
+      "hokuriku-bank",
+      "hokuriku-rokin",
+      "smcc",
+      "paypay",
+    ]);
+    // 7 行 → 6 口座（楽天カード が 2 行）。イオン銀行には 1 行も入らない
+    expect(new Set(rows.map((t) => t.accountId)).size).toBe(6);
+    expect(rows.some((t) => t.accountId === "ion-bank")).toBe(false);
+    expect(warn.mock.calls).toHaveLength(0);
+    warn.mockRestore();
+  });
+
+  it("解決できない保有金融機関の行はスキップし、warn に口座名と日付・摘要を出して件数を数える", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // スキップ経路は実在口座に依存させない（架空名）。実データの回帰は上のテストが担う
+    const skippedHtml = `
+    <table class="table table-hover">
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th></tr></thead>
+      <tbody>
+        <tr><td>10/02(金)</td><td>手数料</td><td>-500</td><td>架空銀行</td></tr>
+        <tr><td>10/03(土)</td><td>コンビニ</td><td>-300</td><td>楽天カード</td></tr>
+      </tbody>
+    </table>`;
+    const counters = { transactionsSkipped: 0 };
+    const rows = parseTransactions(skippedHtml, REAL_ACCOUNTS, new Date(2026, 9, 9), counters);
+    // accounts[0]（楽天カード）へフォールバックしない
+    expect(rows.map((t) => t.description)).toEqual(["コンビニ"]);
+    expect(rows.map((t) => t.accountId)).toEqual(["rakuten-card"]);
+    expect(counters.transactionsSkipped).toBe(1);
+    expect(warn.mock.calls.map((c) => c[0])).toEqual([
+      "未解決の保有金融機関: 架空銀行（2026-10-02 手数料）",
+    ]);
+    warn.mockRestore();
+  });
+
+  it("前方一致が SBI新生銀行 / SBI証券 / SBIベネフィット、北國銀行 / 北陸労働金庫 を取り違えない", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const confusedHtml = `
+    <table class="table table-hover">
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th></tr></thead>
+      <tbody>
+        <tr><td>10/02(金)</td><td>a</td><td>-1</td><td>SBI新生銀行</td></tr>
+        <tr><td>10/03(土)</td><td>b</td><td>-2</td><td>SBI証券</td></tr>
+        <tr><td>10/04(日)</td><td>c</td><td>-3</td><td>SBIベネフィットシステムズ</td></tr>
+        <tr><td>10/05(月)</td><td>d</td><td>-4</td><td>北國銀行</td></tr>
+        <tr><td>10/06(火)</td><td>e</td><td>-5</td><td>北陸労働金庫</td></tr>
+      </tbody>
+    </table>`;
+    const rows = parseTransactions(confusedHtml, REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(rows.map((t) => t.accountId)).toEqual([
+      "sbi-shinsei",
+      "sbi-sec",
+      "sbi-benefit",
+      "hokuriku-bank",
+      "hokuriku-rokin",
+    ]);
+    expect(warn.mock.calls).toHaveLength(0);
+    warn.mockRestore();
+  });
+
+  it("セル内改行が生の改行（<br> でない）でも 1 行目だけを使う", () => {
+    // 実測 cell は生の改行を含む。firstLineText が <br> しか見ないと 2 行目まで連結される
+    const raw = `
+    <table class="table table-hover">
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th></tr></thead>
+      <tbody>
+        <tr><td>10/02(金)</td><td>楽天市場</td><td>-1,000</td><td>楽天カード
+楽天市場(my Rakuten)</td></tr>
+        <tr><td>10/03(土)</td><td>カード利用</td><td>-2,000</td><td>三井住友カード (VpassID)
+未設定</td></tr>
+      </tbody>
+    </table>`;
+    const rows = parseTransactions(raw, REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(rows.map((t) => t.accountId)).toEqual(["rakuten-card", "smcc"]);
+  });
+
+  it("複数の口座名が保有金融機関名で始まるなら name 最長を選ぶ", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const longest = parseTransactions(
+      html,
+      [
+        { id: "card", name: "三井住友カード ( 本サイト ) 1" },
+        { id: "vpass", name: "三井住友カード (VpassID) ( 本サイト ) 2" },
+      ],
+      new Date(2026, 9, 9),
+    );
+    expect(longest[0]!.accountId).toBe("vpass");
+    warn.mockRestore();
+  });
+
+  it("金額セルの (振替) を isTransfer / transferTarget に立て、金額は従来どおり数値化する", () => {
+    const txs = parseTransactions(html, REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(txs[0]).toMatchObject({
+      amount: -22000,
+      isTransfer: true,
+      transferTarget: "三井住友カード (VpassID)",
+    });
+    expect(txs[1]).toMatchObject({ amount: 300000, isTransfer: false, transferTarget: null });
+  });
+
   it("内容（日付/摘要/金額）から決定的な externalId を合成する（再スクレイプで同一・全件一意）", () => {
-    const txs = parseTransactions(html, "acc-1", new Date(2026, 9, 9));
+    const accounts = REAL_ACCOUNTS;
+    const txs = parseTransactions(html, accounts, new Date(2026, 9, 9));
     const ids = txs.map((t) => t.externalId);
     expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
 
-    const again = parseTransactions(html, "acc-1", new Date(2026, 9, 9));
+    const again = parseTransactions(html, accounts, new Date(2026, 9, 9));
     expect(again.map((t) => t.externalId)).toEqual(ids);
   });
 
   it("同日・同額・同摘要が正当に複数ある行は出現回数で区別し、消さない", () => {
     const dupHtml = `
     <table class="table table-hover">
-      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th></tr></thead>
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th></tr></thead>
       <tbody>
-        <tr><td>10/01(水)</td><td>コーヒー</td><td>-450</td></tr>
-        <tr><td>10/01(水)</td><td>コーヒー</td><td>-450</td></tr>
+        <tr><td>10/01(水)</td><td>コーヒー</td><td>-450</td><td>楽天カード</td></tr>
+        <tr><td>10/01(水)</td><td>コーヒー</td><td>-450</td><td>楽天カード</td></tr>
       </tbody>
     </table>`;
-    const txs = parseTransactions(dupHtml, "acc-1", new Date(2026, 9, 9));
+    const txs = parseTransactions(dupHtml, REAL_ACCOUNTS, new Date(2026, 9, 9));
     expect(txs).toHaveLength(2);
     expect(txs[0]!.externalId).not.toBe(txs[1]!.externalId);
   });
 
   it("table-hover のテーブルが無ければ例外", () => {
-    expect(() => parseTransactions("<table><tr><th>日付</th></tr></table>", "acc-1")).toThrow(ScrapeParseError);
+    expect(() => parseTransactions("<table><tr><th>日付</th></tr></table>", [{ id: "acc-1", name: "イオン銀行" }])).toThrow(ScrapeParseError);
   });
 });
 

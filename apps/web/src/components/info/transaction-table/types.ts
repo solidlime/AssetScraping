@@ -2,12 +2,16 @@ export interface Transaction {
   id: number;
   date: string;
   category: string | null;
+  subCategory?: string | null;
   description: string | null;
   amount: number;
   type: string;
   isTransfer: boolean | null;
   isExcludedFromCalculation: boolean | null;
   accountName: string | null;
+  /** 口座の金融機関名（accounts.institution）。行ごとの /cf「保有金融機関」ではないので全行同じ値になる */
+  institution?: string | null;
+  transferTarget?: string | null;
 }
 
 export type SortColumn = "date" | "description" | "category" | "type" | "amount" | "accountName";

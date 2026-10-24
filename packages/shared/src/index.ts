@@ -133,8 +133,12 @@ export interface Transaction {
   /** 出金は負の値に正規化 */
   amount: number;
   category: string | null;
-  /** 本家中項目相当。ssnb に列が無いため crawler 側推定（categorizeTransaction）で補う */
+  /** 本家 sub_category 相当。ssnb の中項目、無ければ crawler 側推定（categorizeTransaction） */
   subCategory?: string | null;
+  /** 金額セルに `(振替)` が付いていたら true */
+  isTransfer?: boolean;
+  /** 振替先（保有金融機関セル原文、無ければ内容） */
+  transferTarget?: string | null;
 }
 
 /**
@@ -189,6 +193,8 @@ export interface ScrapeRun {
   accountsUpserted: number;
   holdingsUpserted: number;
   transactionsUpserted: number;
+  /** /cf で保有金融機関を解決できず捨てた行数（口座を取り違えて書かない代償） */
+  transactionsSkipped: number;
   assetHistoryUpserted: number;
 }
 

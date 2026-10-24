@@ -74,9 +74,7 @@ export function AccountHoldingsTable({ holdings }: { holdings: HoldingRow[] }) {
                   )}
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline">
-                    {holding.categoryName ?? holding.liabilityCategory ?? "未分類"}
-                  </Badge>
+                  <Badge variant="outline">{holding.categoryName ?? "未分類"}</Badge>
                 </TableCell>
               </TableRow>
             ))}

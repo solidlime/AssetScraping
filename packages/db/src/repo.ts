@@ -1,10 +1,10 @@
 import type {
   Account,
-  AccountCategory,
   AccountStatus,
   AssetHistoryPoint,
   Holding,
   MonthlyCashFlowMonth,
+  StoredAccountCategory,
   Transaction,
 } from "@asset-scraping/shared";
 import { buildTransactionExternalId } from "@asset-scraping/shared";
@@ -163,7 +163,8 @@ export interface UpsertAccountInput {
   id: string;
   name: string;
   institution: string;
-  category: AccountCategory;
+  // accounts.category は text 列であり、ssnb のクレカ口座 "card" も実際に入る（StoredAccountCategory）
+  category: StoredAccountCategory;
 }
 
 export function upsertAccount(db: Database, input: UpsertAccountInput): void {
@@ -427,8 +428,8 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
   const occurrenceByContent = new Map<string, number>();
   db.transaction((tx) => {
     for (const t of rows) {
-      // 本家準拠: transactions.amount は常に正値、type で収支を区別する。
-      // crawler 由来の符号はここで吸収し、読み出し側（getTransactions）で逆符号化する。
+      // 本家準拠: 保存は常に正値（abs）で、収支は type（income / expense）で表す。
+      // crawler 由来の符号はここで吸収する。
       const amount = Math.abs(t.amount);
       const type = t.amount >= 0 ? "income" : "expense";
       let externalId = t.externalId;
@@ -447,9 +448,15 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
       // ssnb に大項目・中項目が無い行は内容ベース推定で補完する（crawler categorize.ts
       // と同じ本家 seed カテゴリ体系。db 側に重複実装しないため、
       // crawler 側がすでに推定済みなら t.category / t.subCategory を優先する）。
-      const fallback = t.category === null ? categorizeDbTransaction(t.description) : null;
+      // 片方だけ null のケース（中項目だけ欠落）でも欠落側を補完するため独立判定にする。
+      const fallback =
+        t.category === null || t.subCategory == null
+          ? categorizeDbTransaction(t.description)
+          : null;
       const category = t.category ?? fallback?.category ?? null;
       const subCategory = t.subCategory ?? fallback?.subCategory ?? null;
+      const isTransfer = t.isTransfer ?? false;
+      const transferTarget = t.transferTarget ?? null;
       tx.insert(transactions)
         .values({
           externalId,
@@ -461,7 +468,8 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
           category,
           subCategory,
           type,
-          isTransfer: false,
+          isTransfer,
+          transferTarget,
           isExcludedFromCalculation: false,
           createdAt: ts,
           updatedAt: ts,
@@ -473,6 +481,8 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
             category,
             subCategory,
             type,
+            isTransfer,
+            transferTarget,
             updatedAt: ts,
           },
         })
@@ -567,7 +577,7 @@ export function getAllAccounts(db: Database): Account[] {
     .from(accounts)
     .orderBy(accounts.category, accounts.name)
     .all();
-  return rows.map((r) => ({ ...r, category: r.category as AccountCategory }));
+  return rows.map((r) => ({ ...r, category: r.category as StoredAccountCategory }));
 }
 
 export function getAllAccountStatuses(db: Database): AccountStatus[] {

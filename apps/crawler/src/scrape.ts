@@ -27,7 +27,6 @@ import {
 } from "@asset-scraping/db";
 import {
   SSNB_URLS,
-  type AccountCategory,
   type Holding,
   type ScrapeRun,
 } from "@asset-scraping/shared";
@@ -60,6 +59,7 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     accountsUpserted: 0,
     holdingsUpserted: 0,
     transactionsUpserted: 0,
+    transactionsSkipped: 0,
     assetHistoryUpserted: 0,
   };
 
@@ -80,7 +80,7 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
         id: acc.id,
         name: acc.name,
         institution: acc.institution,
-        category: acc.category as AccountCategory,
+        category: acc.category,
       });
       upsertAccountStatus(db, acc.status);
       upsertDailySnapshot(db, {
@@ -104,7 +104,8 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
         date: withdrawal?.date ?? null,
       });
       const holdings = parseHoldings(html, acc.id, {
-        category: acc.category as AccountCategory,
+        // "card" は ACCOUNT_CATEGORIES 外（負債分類は web の cardDebt が担う）
+        category: acc.category === "card" ? undefined : acc.category,
         accountName: acc.name,
       });
       upsertHoldings(db, holdings);
@@ -136,9 +137,9 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     upsertAssetHistory(db, points);
     stats.assetHistoryUpserted = points.length;
 
-    // 4) 取引明細（/cf、常に当月分。口座横断のため先頭口座に紐付けて保存）
+    // 4) 取引明細（/cf、常に当月分。行ごとに 「保有金融機関」から口座を解決する）
     const cfHtml = await fetcher.fetch(SSNB_URLS.transactions);
-    const txs = parseTransactions(cfHtml, accounts[0]?.id ?? "");
+    const txs = parseTransactions(cfHtml, accounts, undefined, stats);
     upsertTransactions(db, txs);
     stats.transactionsUpserted = txs.length;
 

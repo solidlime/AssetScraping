@@ -107,6 +107,10 @@ export async function getHoldingsByAccountId(
       categoryName: schema.assetCategories.name,
       accountName: schema.accounts.name,
       institution: schema.accounts.institution,
+      // value は holdings 側の生値（パース時の評価額）、amount は holding_values スナップショット由来。
+      // このクエリは holdingValues を innerJoin しているので、スナップショットを持たない
+      // holding はそもそも結果に出ない（value を拾うのは持っている行の生値と比較するため）。
+      value: schema.holdings.value,
       amount: schema.holdingValues.amount,
       quantity: schema.holdingValues.quantity,
       unitPrice: schema.holdingValues.unitPrice,

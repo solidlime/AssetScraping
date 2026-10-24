@@ -38,10 +38,8 @@ export async function HoldingsTable({ type, className, enableSharedFilter = fals
 
   // Group holdings by category
   const grouped = holdings.reduce<Record<string, CategoryGroup["items"]>>((acc, holding) => {
-    const category =
-      holding.type === "liability"
-        ? holding.liabilityCategory || "その他"
-        : holding.categoryName || "その他";
+    // liabilityCategory は廃止（設定しても表示経路が無かった）。負債分類は cardDebt 側で扱う
+    const category = holding.categoryName || "その他";
     acc[category] ??= [];
     acc[category].push({
       id: holding.id,

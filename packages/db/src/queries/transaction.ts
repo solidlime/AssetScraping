@@ -113,7 +113,7 @@ export async function getTransactionsByAccountId(
   const accountIds = await getAccountIdsForGroup(db, groupId);
   if (accountIds.length === 0 || !accountIds.includes(accountId)) return [];
 
-  return await db
+  const rows = await db
     .select({
       id: schema.transactions.id,
       mfId: schema.transactions.mfId,
@@ -127,10 +127,17 @@ export async function getTransactionsByAccountId(
       isExcludedFromCalculation: schema.transactions.isExcludedFromCalculation,
       accountId: schema.transactions.accountId,
       accountName: schema.accounts.name,
+      institution: schema.accounts.institution,
+      transferTarget: schema.transactions.transferTarget,
     })
     .from(schema.transactions)
     .leftJoin(schema.accounts, eq(schema.accounts.id, schema.transactions.accountId))
     .where(eq(schema.transactions.accountId, accountId))
     .orderBy(desc(schema.transactions.date))
     .all();
+
+  // 符号は DB の値そのまま。AmountDisplay が type で色分けするし、
+  // 一覧（getMfTransactions）も反転しないので、ここで反転すると共通コンポーネントの
+  // computeTransactionKpi（balance = totalIncome - totalExpense）が壊れる。
+  return rows;
 }

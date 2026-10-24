@@ -5,7 +5,7 @@ import { AmountDisplay } from "../../ui/amount-display";
 import { Badge } from "../../ui/badge";
 import { EmptyState } from "../../ui/empty-state";
 import { SortableTableHead } from "../../ui/sortable-table-head";
-import { Table, TableBody, TableCell, TableHeader, TableRow } from "../../ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { TypeBadge } from "../../ui/type-badge";
 import type { SortColumn, Transaction } from "./types";
 
@@ -50,6 +50,7 @@ export function TransactionDesktopView({
               currentDirection={sortDirection}
               onSort={onSort}
             />
+            <TableHead>中項目</TableHead>
             <SortableTableHead
               column="type"
               label="種別"
@@ -96,11 +97,14 @@ export function TransactionDesktopView({
                     {transaction.category ?? "振替"}
                   </Badge>
                 </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {transaction.subCategory || ""}
+                </TableCell>
                 <TableCell>
                   <TypeBadge type={transaction.type} isTransfer={transaction.isTransfer} />
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
-                  {transaction.accountName || "-"}
+                  {transaction.institution ?? transaction.accountName ?? "-"}
                 </TableCell>
                 <TableCell className="text-right">
                   <AmountDisplay
@@ -119,7 +123,7 @@ export function TransactionDesktopView({
             ))
           ) : (
             <TableRow>
-              <TableCell colSpan={6}>
+              <TableCell colSpan={7}>
                 <EmptyState message="取引が見つかりません" />
               </TableCell>
             </TableRow>

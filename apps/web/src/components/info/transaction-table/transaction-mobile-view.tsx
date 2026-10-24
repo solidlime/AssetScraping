@@ -41,6 +41,9 @@ export function TransactionMobileView({ transactions }: TransactionMobileViewPro
                   >
                     {transaction.category ?? "振替"}
                   </Badge>
+                  {transaction.subCategory && (
+                    <span className="text-xs text-muted-foreground">{transaction.subCategory}</span>
+                  )}
                   {transaction.accountName && (
                     <span className="text-xs text-muted-foreground">
                       {transaction.accountName}

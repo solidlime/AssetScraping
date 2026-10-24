@@ -17,6 +17,7 @@ import type {
   Holding,
   MonthlyCashFlowMonth,
   MonthlyCashFlowRow,
+  ScrapeRun,
   StoredAccountCategory,
   Transaction,
 } from "@asset-scraping/shared";
@@ -51,9 +52,17 @@ export function guessCategory(text: string): StoredAccountCategory {
   return "other";
 }
 
-/** "1,234,567円" / "-12,345円" → number。円表記が必須（日付・カレンダー数字の誤爆防止）。 */
+/**
+ * 空白除去 + MF が描画に使うマイナス（U+2212）と、表記ゆれの全角ハイフン U+FF0D・
+ * en dash U+2013 を ASCII に寄せる（Number() はいずれも読めない）。
+ */
+function normalizeMinus(text: string): string {
+  return text.replace(/\s/g, "").replace(/[\u2212\uFF0D\u2013]/g, "-");
+}
+
+/** "1,234,567円" / "-12,345円" / "−12,345円" → number。円表記が必須（日付・カレンダー数字の誤爆防止）。 */
 export function parseYen(text: string): number | null {
-  const m = /(-?\d[\d,]*(?:\.\d+)?)円/.exec(text.replace(/\s/g, ""));
+  const m = /(-?\d[\d,]*(?:\.\d+)?)円/.exec(normalizeMinus(text));
   if (!m) return null;
   const n = Number(m[1]?.replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
@@ -64,7 +73,7 @@ export function parseYen(text: string): number | null {
  * 日付・カテゴリ等の非金額セルは呼び出し側で選んで渡すこと。
  */
 export function parseYenLoose(text: string): number | null {
-  const m = /(-?\d[\d,]*(?:\.\d+)?)/.exec(text.replace(/\s/g, ""));
+  const m = /(-?\d[\d,]*(?:\.\d+)?)/.exec(normalizeMinus(text));
   if (!m) return null;
   const n = Number(m[1]?.replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
@@ -123,6 +132,19 @@ function cellText(cell: HtmlElement | null | undefined): string {
     .join("")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** セルテキストの 1 行目だけ（セル内改行・<br> を保ったまま空白圧縮・トリム） */
+function firstLineText(cell: HtmlElement | null | undefined): string {
+  if (!cell) return "";
+  const raw = cell.childNodes
+    .map((child) =>
+      child.nodeType === NodeType.ELEMENT_NODE && (child as HtmlElement).tagName === "BR"
+        ? "\n"
+        : visibleText(child),
+    )
+    .join("");
+  return raw.split(/\r?\n/)[0]!.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -643,12 +665,42 @@ export function parseAssetHistory(html: string): AssetHistoryPoint[] {
 // ---------------------------------------------------------------------------
 
 /**
+ * 「保有金融機関」セル（"三井住友カード (VpassID)" 等）から口座を解決する。
+ * accounts.name は `<金融機関名> ( 本サイト ) <番号>` 形式で保有金融機関名を接頭辞に持つため
+ * 前方一致で探し、複数該当時は name 最長を選ぶ（楽天カード が 楽天カード ... 楽天市場 に負けない）。
+ */
+function resolveTransactionAccountId(
+  institution: string,
+  accounts: Array<{ id: string; name: string }>,
+): string | null {
+  const target = institution.replace(/\s+/g, " ").trim();
+  if (!target) return null;
+  let best: { id: string; length: number } | null = null;
+  for (const acc of accounts) {
+    const name = acc.name.replace(/\s+/g, " ").trim();
+    if (!name || !name.startsWith(target)) continue;
+    if (!best || name.length > best.length) best = { id: acc.id, length: name.length };
+  }
+  return best?.id ?? null;
+}
+
+/**
  * 取引明細（/cf の table-hover テーブル）を parse する。実測（2026-10）:
  * - th ヘッダ: 計算対象/日付/内容/金額（円）/保有金融機関/大項目/中項目/…
- * - td: [0]=checkbox、[1]=日付 "10/02(金)"、[2]=内容、[3]=金額（"-22,000\n(振替)"、負値=出金）、[5]=大項目、[6]=中項目
+ * - td: [0]=checkbox、[1]=日付 "10/02(金)"、[2]=内容、[3]=金額（"-22,000\n(振替)"、負値=出金）、
+ *   [4]=保有金融機関（セル内改行あり）、[5]=大項目、[6]=中項目
  * - 取引 ID リンクは無い（externalId = null）。常に当月分のみ。
+ * - 行ごとに「保有金融機関」から口座を解決する。解決できない行は**スキップ**する
+ *   （旧実装の accounts[0] フォールバックは、実測で保有金融機関に存在しない銀行の
+ *   ページにカード明細を混ぜる形でユーザーに見えていた。データを偽らず warn で気づかせる）。
  */
-export function parseTransactions(html: string, accountId: string, now: Date = new Date()): Transaction[] {
+export function parseTransactions(
+  html: string,
+  accounts: Array<{ id: string; name: string }>,
+  now: Date = new Date(),
+  // スキップ件数の可観測性: 呼び出し側（ScrapeRun）に件数を積む。未指定なら数えない
+  counters?: Pick<ScrapeRun, "transactionsSkipped">,
+): Transaction[] {
   const root = parse(html);
   const table = root
     .querySelectorAll("table")
@@ -665,6 +717,7 @@ export function parseTransactions(html: string, accountId: string, now: Date = n
   const dateIdx = idx("日付");
   const descIdx = idx("内容");
   const amountIdx = header.findIndex((s) => s.startsWith("金額"));
+  const institutionIdx = idx("保有金融機関");
   const majorIdx = idx("大項目");
   const minorIdx = idx("中項目");
 
@@ -679,16 +732,30 @@ export function parseTransactions(html: string, accountId: string, now: Date = n
     if (!date) continue;
     const description = cellText(tds[descIdx]);
     if (!description) continue;
-    // 金額セル: "-22,000\n(振替)" → -22000（(振替) 付与・負値は維持）
-    const amount = parseYenLoose(cellText(tds[amountIdx]).replace(/\(振替\)/g, ""));
+    // 保有金融機関: セル内改行の 1 行目のみ（"楽天カード\n楽天市場(my Rakuten)" → "楽天カード"）
+    const institution =
+      institutionIdx >= 0 ? firstLineText(tds[institutionIdx]) : "";
+    const accountId = resolveTransactionAccountId(institution, accounts);
+    if (!accountId) {
+      // どの口座（保有金融機関セル）のどの行で落ちたか分かるように warn する
+      console.warn(`未解決の保有金融機関: ${institution}（${date} ${description}）`);
+      if (counters) counters.transactionsSkipped++;
+      continue;
+    }
+    // 金額セル: "-22,000\n(振替)" → -22000。符号・parseYenLoose の挙動は変えず、
+    // 除去前に (振替) を検出して isTransfer / transferTarget に立てる
+    const amountText = cellText(tds[amountIdx]);
+    const isTransfer = /\(振替\)/.test(amountText);
+    const amount = parseYenLoose(amountText.replace(/\(振替\)/g, ""));
     if (amount === null) continue;
     const major = cellText(tds[majorIdx]);
     const minor = cellText(tds[minorIdx]);
     // 大項目・中項目が無い行は内容ベース推定（本家 seed カテゴリ体系）で補完する。
     // 判定不能は null（web 側の未分類/その他扱い）。
     const estimated = categorizeTransaction(description);
-    const category = [major, minor].filter(Boolean).join(" / ") || estimated?.category || null;
-    const subCategory = estimated?.subCategory ?? null;
+    // 中項目は category に連結せず subCategory へ入れる（本家の category / sub_category 分離に合わせる）
+    const category = major || estimated?.category || null;
+    const subCategory = minor || estimated?.subCategory || null;
     const contentKey = `${date}\u0000${description}\u0000${amount}`;
     const occurrence = occurrenceByContent.get(contentKey) ?? 0;
     occurrenceByContent.set(contentKey, occurrence + 1);
@@ -700,6 +767,8 @@ export function parseTransactions(html: string, accountId: string, now: Date = n
       amount,
       category,
       subCategory,
+      isTransfer,
+      transferTarget: isTransfer ? institution || description : null,
     });
   }
   return txs;
