@@ -12,6 +12,8 @@ type AccountCardProps = {
   status: AccountStatusType;
   lastUpdated: string | null;
   totalAssets: number;
+  /** カテゴリ名（未分類は "未分類"） — クレカカード判定に使う */
+  categoryName: string;
   /** F7: クレカの引き落とし予定額（正値） */
   scheduledWithdrawalAmount?: number | null;
   /** F7: 引き落とし予定日 (YYYY-MM-DD) */
@@ -25,6 +27,7 @@ export function AccountCard({
   status,
   lastUpdated,
   totalAssets,
+  categoryName,
   scheduledWithdrawalAmount,
   scheduledWithdrawalDate,
 }: AccountCardProps) {
@@ -46,11 +49,16 @@ export function AccountCard({
           <AmountDisplay amount={totalAssets} size="2xl" weight="bold" />
         </div>
 
-        {scheduledWithdrawalAmount != null && scheduledWithdrawalDate && (
+        {scheduledWithdrawalAmount != null && scheduledWithdrawalDate ? (
           <div className="mb-3 text-sm text-muted-foreground">
             引き落とし予定: {scheduledWithdrawalAmount.toLocaleString("ja-JP")}円
             （{scheduledWithdrawalDate}）
           </div>
+        ) : (
+          // クレカで予定額が取れていない場合、「警告なし」と区別できるよう状態だけ出す（数字は出さない）
+          categoryName === "カード" && (
+            <div className="mb-3 text-sm text-muted-foreground">引落予定：未定</div>
+          )
         )}
 
         <div className="flex items-center justify-between h-5">

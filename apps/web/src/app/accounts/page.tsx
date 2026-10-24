@@ -1,4 +1,4 @@
-import { getAccountAlerts, getAccountsGroupedByCategory, getDb } from "@asset-scraping/db";
+import { getAccountAlerts, getAccountsGroupedByCategory, getDb, getWithdrawalAccountState } from "@asset-scraping/db";
 import { CreditCard } from "lucide-react";
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
@@ -21,11 +21,15 @@ export default async function AccountsPage() {
   const okCount = autoAccounts.filter((a) => a.status === "ok").length;
   const errorCount = autoAccounts.filter((a) => a.status === "error").length;
 
-  // 口座警告（低残高・異常ステータス）の件数バッジ（getAccountAlerts は現在残高ベース）
+  // 口座警告（低残高・異常ステータス・引き落とし残高不足）。件数は**口座数**で数える
+  // （同じ口座が low_balance と scheduled_withdrawal の両方に載るため、行数で数えると二重計上になる）
   const alerts = getAccountAlerts(getDb());
-  const alertCount = alerts.length;
+  const alertCount = new Set(alerts.map((a) => a.accountId)).size;
   // F7: クレカ引き落としの残高不足警告（内容を見せる）
   const withdrawalAlerts = alerts.filter((a) => a.kind === "scheduled_withdrawal");
+  // 引き落とし口座が未設定（かつ銀行口座が複数で自動代用できない）ならその旨を出す
+  const withdrawalAccount = getWithdrawalAccountState(getDb());
+  const withdrawalNote = withdrawalAlerts.find((a) => a.note)?.note;
 
   return (
     <PageLayout
@@ -58,7 +62,22 @@ export default async function AccountsPage() {
               ))}
             </ul>
             <p className="mt-3 text-xs text-muted-foreground">
-              引き落とし口座の残高と ssnb の引き落とし予定額の比較です。金額・期日が未確定のカードは表示しません。
+              ssnb の引き落とし予定額が
+              {withdrawalAccount.accountName ? `「${withdrawalAccount.accountName}」` : "引き落とし口座"}
+              の残高を超えています。金額・期日が未確定のカードは表示しません。
+            </p>
+            {withdrawalNote && <p className="mt-1 text-xs text-muted-foreground">{withdrawalNote}</p>}
+          </CardContent>
+        </Card>
+      )}
+      {withdrawalAccount.status === "ambiguous" && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle icon={CreditCard}>引き落とし口座が未設定です</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              銀行口座が複数あるため、引き落とし残高の比較に使う口座が決まっていません。設定タブで「引き落とし口座」を選ぶと警告を出します。
             </p>
           </CardContent>
         </Card>

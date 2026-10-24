@@ -92,13 +92,16 @@ export function createMcpServer(): McpServer {
       withdrawal_alert_days: z
         .number()
         .int()
-        .min(0)
+        .min(1)
+        .max(30)
         .optional()
-        .describe("引き落とし日まで何日以内なら警告するか。省略時は DB 設定（既定 7）"),
+        .describe("引き落とし日まで何日以内なら警告するか（1〜30）。省略時は DB 設定（既定 7）"),
       withdrawal_account_id: z
         .string()
         .optional()
-        .describe("引き落とし口座の口座 ID。省略時は DB 設定、未設定なら銀行カテゴリ残高の合計で判定"),
+        .describe(
+          "引き落とし口座の口座 ID。省略時は DB 設定。未設定なら銀行口座が1つだけのときにそれを、複数なら警告しない",
+        ),
     },
     ({ threshold, withdrawal_alert_days, withdrawal_account_id }) =>
       dbTool((db) =>

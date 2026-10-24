@@ -3,9 +3,15 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { createDb, schema, type Database } from "../src/index.js";
-import { todayJst } from "../src/repo.js";
-import { getAccountAlerts, type AccountAlert } from "../src/repositories/alerts.js";
-import { SETTING_KEYS, setSetting } from "../src/repositories/settings.js";
+import { todayJst, saveScheduledWithdrawal } from "../src/repo.js";
+import { getAccountAlerts, getWithdrawalAccountState, type AccountAlert } from "../src/repositories/alerts.js";
+import {
+  DEFAULT_WITHDRAWAL_ALERT_DAYS,
+  getWithdrawalAlertDays,
+  SETTING_KEYS,
+  setSetting,
+  setWithdrawalAlertDays,
+} from "../src/repositories/settings.js";
 
 let db: Database;
 
@@ -33,13 +39,14 @@ function dayOffset(days: number): string {
   return new Date(d.getTime() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
-/** クレカ口座（引き落とし予定額・予定日付き）を投入 */
+/** クレカ口座（category="card"・引き落とし予定額・予定日付き）を投入 */
 function seedCard(
   id: string,
   name: string,
   opts: { amount: number | null; date: string | null },
 ): void {
   seedAccount(id, name, name, 0);
+  db.update(schema.accounts).set({ category: "card" }).where(eq(schema.accounts.id, id)).run();
   db.update(schema.accountStatuses)
     .set({
       scheduledWithdrawalAmount: opts.amount,
@@ -201,12 +208,70 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
   });
 
   it("institution_categories が未充填でも accounts.category=\"bank\" の残高で判定する（本番 DB の実態）", () => {
-    // カテゴリマスタを作らずに銀行を seed（NAS 実 DB と同じ状況）
+    // カテゴリマスタを作らずに銀行を seed（NAS 実 DB と同じ状況）。銀行が1つなので既定で使う
     seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
     seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
     const alerts = scheduledKinds();
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.shortage).toBe(45_267);
+    expect(alerts[0]?.balance).toBe(30_000); // 判定に使った口座の残高（カード自身の負債ではない）
+  });
+
+  it("未設定で銀行が1つだけならその口座で判定し、注意書きを付ける", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    const alert = scheduledKinds()[0];
+    expect(alert?.withdrawalAccountName).toBe("青空銀行");
+    expect(alert?.note).toContain("引き落とし口座は未設定");
+  });
+
+  it("未設定で銀行が複数なら警告しない（合算しない・未設定状態を返す）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    // 合算（210_000）すれば足りてしまうが、合算判定はしない
+    expect(scheduledKinds()).toHaveLength(0);
+    expect(getWithdrawalAccountState(db)).toEqual({
+      status: "ambiguous",
+      accountId: null,
+      accountName: null,
+      balance: null,
+    });
+  });
+
+  it("カード自身の残高は判定残高に混入しない（category=\"card\" は銀行扱いしない）", () => {
+    // bank カテゴリの口座が無く、カードの負債残高だけが大きい状況
+    seedAccount("card-1", "三井住友カード", "三井住友カード", 500_000);
+    db.update(schema.accounts).set({ category: "card" }).where(eq(schema.accounts.id, "card-1")).run();
+    db.update(schema.accountStatuses)
+      .set({ scheduledWithdrawalAmount: 75_267, scheduledWithdrawalDate: dayOffset(3) })
+      .where(eq(schema.accountStatuses.accountId, "card-1"))
+      .run();
+    expect(scheduledKinds()).toHaveLength(0);
+    expect(getWithdrawalAccountState(db).status).toBe("none");
+  });
+
+  it("saveScheduledWithdrawal(null) で古い予定がクリアされ、警告が消える", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 30_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    expect(scheduledKinds()).toHaveLength(1);
+    // ssnb が「未定」に戻った状況
+    saveScheduledWithdrawal(db, { accountId: "card-1", amount: null, date: null });
+    expect(scheduledKinds()).toHaveLength(0);
+  });
+
+  it("引き落とし警告の日数は 1〜30 にクランプされる（不正値は既定）", () => {
+    expect(getWithdrawalAlertDays(db)).toBe(DEFAULT_WITHDRAWAL_ALERT_DAYS);
+    setSetting(db, SETTING_KEYS.withdrawalAlertDays, "365");
+    expect(getWithdrawalAlertDays(db)).toBe(30);
+    setSetting(db, SETTING_KEYS.withdrawalAlertDays, "0");
+    expect(getWithdrawalAlertDays(db)).toBe(1);
+    setSetting(db, SETTING_KEYS.withdrawalAlertDays, "abc");
+    expect(getWithdrawalAlertDays(db)).toBe(DEFAULT_WITHDRAWAL_ALERT_DAYS);
+    setWithdrawalAlertDays(db, 14);
+    expect(getWithdrawalAlertDays(db)).toBe(14);
+    expect(() => setWithdrawalAlertDays(db, 0)).toThrow(/1〜30/);
+    expect(() => setWithdrawalAlertDays(db, 31)).toThrow(/1〜30/);
   });
 
   it("既存 kind の判定結果は変わらない（引き落とし列が入っても）", () => {

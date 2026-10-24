@@ -4,27 +4,36 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { FormField } from "../ui/form-field";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 
 interface SettingsPayload {
   ok: boolean;
   scheduledRefreshTime?: string;
   lowBalanceThreshold?: number;
+  withdrawalAlertDays?: number;
+  withdrawalAccountId?: string | null;
   credential?: { loginId: string; hasPassword: boolean };
   error?: string;
 }
+
+/** 未設定を表す UI 側のセンチネル（空文字を Select に渡さないため） */
+const NO_ACCOUNT = "none";
 
 /**
  * 設定タブの中身。crawler (:8766 /settings) を /api/settings 経由で読み書きする。
  * - 定期更新時刻（HH:MM JST、既定 06:00）
  * - 残高しきい値（口座一覧の警告バッジ・getAccountAlerts と共通の設定値）
+ * - クレカ引き落とし警告の日数 N と引き落とし口座（F7）
  * - ssnb 認証情報（パスワードはマスク表示・空欄なら既存値を保持）
  */
-export function SettingsForm() {
+export function SettingsForm({ withdrawalAccounts }: { withdrawalAccounts: { id: string; name: string }[] }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [scheduledRefreshTime, setScheduledRefreshTime] = useState("06:00");
   const [lowBalanceThreshold, setLowBalanceThreshold] = useState<number>(100_000);
+  const [withdrawalAlertDays, setWithdrawalAlertDays] = useState<number>(7);
+  const [withdrawalAccountId, setWithdrawalAccountId] = useState<string>(NO_ACCOUNT);
   const [loginId, setLoginId] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
   const [password, setPassword] = useState("");
@@ -42,6 +51,12 @@ export function SettingsForm() {
             ? body.lowBalanceThreshold
             : 100_000,
         );
+        setWithdrawalAlertDays(
+          typeof body.withdrawalAlertDays === "number" && Number.isFinite(body.withdrawalAlertDays)
+            ? body.withdrawalAlertDays
+            : 7,
+        );
+        setWithdrawalAccountId(body.withdrawalAccountId ?? NO_ACCOUNT);
         setLoginId(body.credential?.loginId ?? "");
         setHasPassword(body.credential?.hasPassword ?? false);
       } else {
@@ -71,6 +86,8 @@ export function SettingsForm() {
       if (body.ok) {
         if (body.scheduledRefreshTime) setScheduledRefreshTime(body.scheduledRefreshTime);
         if (typeof body.lowBalanceThreshold === "number") setLowBalanceThreshold(body.lowBalanceThreshold);
+        if (typeof body.withdrawalAlertDays === "number") setWithdrawalAlertDays(body.withdrawalAlertDays);
+        setWithdrawalAccountId(body.withdrawalAccountId ?? NO_ACCOUNT);
         if (body.credential) {
           setLoginId(body.credential.loginId);
           setHasPassword(body.credential.hasPassword);
@@ -147,6 +164,67 @@ export function SettingsForm() {
             onClick={() => save({ lowBalanceThreshold }, "残高しきい値を保存しました")}
           >
             しきい値を保存
+          </Button>
+        </div>
+      </FormField>
+
+      <FormField
+        label="引き落とし警告の日数（日）"
+        htmlFor="withdrawal-alert-days"
+        description="クレカの引き落とし日までこの日数以内で、予定額が引き落とし口座の残高を超える場合に警告します。1〜30、既定は 7。"
+      >
+        <div className="flex items-center gap-2">
+          <Input
+            id="withdrawal-alert-days"
+            type="number"
+            min={1}
+            max={30}
+            value={withdrawalAlertDays}
+            onChange={(e) => setWithdrawalAlertDays(Number(e.target.value))}
+            className="w-24"
+            disabled={saving}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={saving || !Number.isFinite(withdrawalAlertDays) || withdrawalAlertDays < 1 || withdrawalAlertDays > 30}
+            onClick={() => save({ withdrawalAlertDays }, "引き落とし警告の日数を保存しました")}
+          >
+            日数を保存
+          </Button>
+        </div>
+      </FormField>
+
+      <FormField
+        label="引き落とし口座"
+        htmlFor="withdrawal-account-id"
+        description="クレカの引き落とし予定額と残高を比べる銀行口座。未設定の場合、銀行口座が1つだけなら自動でそれを使い、複数なら警告しません。"
+      >
+        <div className="flex items-center gap-2">
+          <Select
+            id="withdrawal-account-id"
+            aria-label="引き落とし口座"
+            className="w-72"
+            value={withdrawalAccountId}
+            disabled={saving}
+            onChange={setWithdrawalAccountId}
+            options={[
+              { value: NO_ACCOUNT, label: "未設定（自動判定）" },
+              ...withdrawalAccounts.map((a) => ({ value: a.id, label: a.name })),
+            ]}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={saving}
+            onClick={() =>
+              save(
+                { withdrawalAccountId: withdrawalAccountId === NO_ACCOUNT ? null : withdrawalAccountId },
+                "引き落とし口座を保存しました",
+              )
+            }
+          >
+            口座を保存
           </Button>
         </div>
       </FormField>

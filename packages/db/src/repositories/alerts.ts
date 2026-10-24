@@ -18,14 +18,19 @@ export interface AccountAlert {
   accountId: string;
   accountName: string;
   institution: string;
+  /** scheduled_withdrawal のみ: 判定に使った引き落とし口座の残高 */
   balance: number;
   status: AccountStatusType;
   /** scheduled_withdrawal のみ: 引き落とし予定額（正値） */
   scheduledWithdrawalAmount?: number;
   /** scheduled_withdrawal のみ: 引き落とし予定日 (YYYY-MM-DD) */
   scheduledWithdrawalDate?: string;
-  /** scheduled_withdrawal のみ: 不足額（予定額 - 引き落とし口座残高） */
+  /** scheduled_withdrawal のみ: 不足額（予定額 - 判定に使った口座の残高） */
   shortage?: number;
+  /** scheduled_withdrawal のみ: 判定に使った引き落とし口座の名称 */
+  withdrawalAccountName?: string;
+  /** scheduled_withdrawal のみ: 設定未投入など注意書き */
+  note?: string;
 }
 
 const ALERT_STATUS_VALUES: ReadonlySet<AccountStatusType> = new Set<AccountStatusType>(["error", "updating", "suspended"]);
@@ -50,9 +55,46 @@ function daysUntil(from: string, to: string): number {
 }
 
 /**
+ * 引き落とし口座の解決結果。
+ * "ambiguous"（未設定かつ銀行口座が複数）と "none" は判定不能なので警告しない。
+ */
+export interface WithdrawalAccountState {
+  status: "set" | "single" | "ambiguous" | "none";
+  accountId: string | null;
+  accountName: string | null;
+  balance: number | null;
+}
+
+/** 銀行系口座か。カード自身（負債）は判定残高に混ぜない */
+function isBankRow(row: AlertRow): boolean {
+  if (row.category === "card") return false;
+  return row.categoryName === "銀行" || row.category === "bank";
+}
+
+function resolveWithdrawalAccount(rows: AlertRow[], withdrawalAccountId: string | null): WithdrawalAccountState {
+  const configured = withdrawalAccountId
+    ? rows.find((row) => row.accountId === withdrawalAccountId && row.category !== "card")
+    : undefined;
+  if (configured) {
+    return {
+      status: "set",
+      accountId: configured.accountId,
+      accountName: configured.accountName,
+      balance: configured.balance,
+    };
+  }
+  const banks = rows.filter(isBankRow);
+  const only = banks.length === 1 ? banks[0] : undefined;
+  if (only) {
+    return { status: "single", accountId: only.accountId, accountName: only.accountName, balance: only.balance };
+  }
+  return { status: banks.length === 0 ? "none" : "ambiguous", accountId: null, accountName: null, balance: null };
+}
+
+/**
  * F7: クレカの引き落とし予定額が引き落とし口座の残高を超え、かつ期日が N 日以内のものを返す。
  * 金額・期日のどちらかが欠けている口座は警告しない（誤警告より無警告）。
- * 引き落とし口座は設定 `withdrawal_account_id` の口座、未設定なら銀行カテゴリ残高の合計。
+ * 引き落とし口座は設定 `withdrawal_account_id`、未設定なら銀行口座がちょうど1つの時だけそれを使う。
  */
 function buildScheduledWithdrawalAlerts(
   rows: AlertRow[],
@@ -63,13 +105,13 @@ function buildScheduledWithdrawalAlerts(
   );
   if (scheduled.length === 0) return [];
 
-  const available = opts.withdrawalAccountId
-    ? (rows.find((row) => row.accountId === opts.withdrawalAccountId)?.balance ?? null)
-    : // 本番 DB は institution_categories が空・category_id が NULL のため accounts.category も見る
-      rows
-        .filter((row) => row.categoryName === "銀行" || row.category === "bank")
-        .reduce((sum, row) => sum + row.balance, 0);
-  if (available === null) return [];
+  const source = resolveWithdrawalAccount(rows, opts.withdrawalAccountId);
+  const available = source.balance;
+  if (available === null || source.accountId === null) return [];
+  const note =
+    source.status === "single"
+      ? `（引き落とし口座は未設定のため「${source.accountName}」で判定）`
+      : undefined;
 
   return scheduled
     .filter((row) => {
@@ -83,25 +125,19 @@ function buildScheduledWithdrawalAlerts(
       accountId: row.accountId,
       accountName: row.accountName,
       institution: row.institution,
-      balance: row.balance,
+      balance: available,
       status: toAccountStatusType(row.status),
       scheduledWithdrawalAmount: row.scheduledWithdrawalAmount as number,
       scheduledWithdrawalDate: row.scheduledWithdrawalDate as string,
       shortage: (row.scheduledWithdrawalAmount as number) - available,
+      withdrawalAccountName: source.accountName ?? undefined,
+      ...(note !== undefined ? { note } : {}),
     }));
 }
 
-/**
- * 警告リスト取得。threshold を省略すると DB 設定（低残高しきい値、既定 100_000）から読む。
- * ソート: low_balance 残高昇順（同一残高は accountId順） → account_status。
- * 両方該当の口座は low_balance に統一する（重複返しはしない）。
- */
-export function getAccountAlerts(
-  db: Database,
-  opts: { threshold?: number; withdrawalAlertDays?: number; withdrawalAccountId?: string | null; today?: string } = {},
-): AccountAlert[] {
-  const threshold = opts.threshold ?? getLowBalanceThreshold(db);
-  const rows: AlertRow[] = db
+/** 警告判定に使う口座×ステータスの平坦な行。本番 DB は category_id 未充填なので category も併用する */
+function loadAlertRows(db: Database): AlertRow[] {
+  return db
     .select({
       accountId: accounts.id,
       accountName: accounts.name,
@@ -118,6 +154,32 @@ export function getAccountAlerts(
     .leftJoin(institutionCategories, eq(institutionCategories.id, accounts.categoryId))
     .all()
     .map((row) => ({ ...row, balance: row.balance ?? 0 }));
+}
+
+/**
+ * 引き落とし口座が決まっているかを返す（設定済み / 銀行1つで代用 / 未設定で判定不能）。
+ * UI は "ambiguous"・"none" の時に「引き落とし口座が未設定です」を出す。
+ */
+export function getWithdrawalAccountState(
+  db: Database,
+  opts: { withdrawalAccountId?: string | null } = {},
+): WithdrawalAccountState {
+  const configured =
+    opts.withdrawalAccountId !== undefined ? opts.withdrawalAccountId : getWithdrawalAccountId(db);
+  return resolveWithdrawalAccount(loadAlertRows(db), configured);
+}
+
+/**
+ * 警告リスト取得。threshold を省略すると DB 設定（低残高しきい値、既定 100_000）から読む。
+ * ソート: low_balance 残高昇順（同一残高は accountId順） → account_status → scheduled_withdrawal 期日昇順。
+ * 両方該当の口座は low_balance に統一する（重複返しはしない）。
+ */
+export function getAccountAlerts(
+  db: Database,
+  opts: { threshold?: number; withdrawalAlertDays?: number; withdrawalAccountId?: string | null; today?: string } = {},
+): AccountAlert[] {
+  const threshold = opts.threshold ?? getLowBalanceThreshold(db);
+  const rows = loadAlertRows(db);
 
   const normStatus = (value: string | null) => toAccountStatusType(value);
 
@@ -160,6 +222,11 @@ export function getAccountAlerts(
         a.kind === "low_balance" ? 0 : a.kind === "account_status" ? 1 : 2;
       const kindDiff = rank(x) - rank(y);
       if (kindDiff !== 0) return kindDiff;
+      if (x.kind === "scheduled_withdrawal" && y.kind === "scheduled_withdrawal") {
+        const xd = x.scheduledWithdrawalDate ?? "";
+        const yd = y.scheduledWithdrawalDate ?? "";
+        if (xd !== yd) return xd < yd ? -1 : 1;
+      }
       if (x.balance !== y.balance) return x.balance - y.balance;
       return x.accountId < y.accountId ? -1 : x.accountId > y.accountId ? 1 : 0;
     });

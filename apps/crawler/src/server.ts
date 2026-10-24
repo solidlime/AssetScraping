@@ -15,10 +15,14 @@ import {
   getCrawlerCredential,
   getLowBalanceThreshold,
   getScheduledRefreshTime,
+  getWithdrawalAccountId,
+  getWithdrawalAlertDays,
   resolveDbPath,
   setCrawlerCredential,
   setLowBalanceThreshold,
   setScheduledRefreshTime,
+  setWithdrawalAccountId,
+  setWithdrawalAlertDays,
   type Database,
 } from "@asset-scraping/db";
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
@@ -128,6 +132,8 @@ function settingsPayload(db: Database): Record<string, unknown> {
     ok: true,
     scheduledRefreshTime: getScheduledRefreshTime(db),
     lowBalanceThreshold: getLowBalanceThreshold(db),
+    withdrawalAlertDays: getWithdrawalAlertDays(db),
+    withdrawalAccountId: getWithdrawalAccountId(db),
     credential: credential
       ? { loginId: credential.loginId, hasPassword: true }
       : { loginId: "", hasPassword: false },
@@ -142,6 +148,18 @@ function applySettingsUpdate(db: Database, body: Record<string, unknown>): void 
     const n = Number(body.lowBalanceThreshold);
     if (!Number.isFinite(n)) throw new Error("lowBalanceThreshold は数値で指定してください");
     setLowBalanceThreshold(db, n);
+  }
+  if (body.withdrawalAlertDays !== undefined) {
+    const n = Number(body.withdrawalAlertDays);
+    if (!Number.isFinite(n)) throw new Error("withdrawalAlertDays は数値で指定してください");
+    setWithdrawalAlertDays(db, n);
+  }
+  if (body.withdrawalAccountId !== undefined) {
+    const id = body.withdrawalAccountId;
+    if (id !== null && typeof id !== "string") {
+      throw new Error("withdrawalAccountId は文字列か null で指定してください");
+    }
+    setWithdrawalAccountId(db, id === null || id === "" ? null : id);
   }
   if (body.credential !== undefined) {
     const cred = body.credential as Record<string, unknown> | null;

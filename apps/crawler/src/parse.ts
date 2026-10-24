@@ -189,9 +189,9 @@ export function parseAccounts(html: string): Array<Account & { status: AccountSt
 
 /** クレカの引き落とし予定（/accounts/show/{id} の「引き落とし予定額」列） */
 export interface ScheduledWithdrawal {
-  /** 引き落とし予定額の合計（円・正値）。ssnb は負値（負債）で返すため絶対値にする */
+  /** 引き落とし予定額（円・正値）。ssnb は負値（負債）で返すため絶対値にする */
   amount: number;
-  /** 最も早い引き落とし予定日 (YYYY-MM-DD) */
+  /** 引き落とし予定日 (YYYY-MM-DD)。amount はこの日の明細のみの合計 */
   date: string;
 }
 
@@ -201,6 +201,9 @@ export interface ScheduledWithdrawal {
  * - 未定（PayPayカード）は全セル「−」で合計も「未定」→ null を返す
  * - 同じページにポイント／負債／収入・支出詳細の表が同居するため、列見出しで表を特定する
  * 金額と期日が揃わない場合は null（誤警告より無警告）。
+ *
+ * 期日ごとに金額を分け、**最も早い期日ぶんだけ**を返す（全明細を合算すると
+ * 「その日には落ちない金額」を返すことになる。N 日の窓では最早期日より後は判定対象外）。
  */
 export function parseScheduledWithdrawal(html: string): ScheduledWithdrawal | null {
   const root = parse(html);
@@ -209,19 +212,34 @@ export function parseScheduledWithdrawal(html: string): ScheduledWithdrawal | nu
     .find((t) => t.querySelectorAll("th").some((th) => cellText(th).includes("引き落とし予定額")));
   if (!table) return null;
 
-  let amount = 0;
-  let date: string | null = null;
+  const byDate = new Map<string, number>();
   for (const row of table.querySelectorAll("tr")) {
+    // 合計行（「引き落とし予定額合計」）は明細ではないので拾わない
+    if (cellText(row).includes("合計")) continue;
     for (const cell of row.querySelectorAll("td")) {
       const text = cellText(cell);
       const yen = parseYen(text);
       const day = parseDate(text);
       if (yen === null || day === null) continue;
-      amount += Math.abs(yen);
-      if (date === null || day < date) date = day;
+      byDate.set(day, (byDate.get(day) ?? 0) + Math.abs(yen));
     }
   }
-  return amount > 0 && date !== null ? { amount, date } : null;
+
+  const date = [...byDate.keys()].sort()[0];
+  const amount = date === undefined ? 0 : byDate.get(date)!;
+  if (date === undefined || amount <= 0) return null;
+
+  // 合計値がページにあれば明細合算と突き合わせる。食い違う＝抽出が壊れている
+  // （行の取りこぼし・合計行の二重計上）ので、金額を信じず null＝無警告に倒す。
+  const totalText = /引き落とし予定額合計[：:]\s*([^\n]{0,24})/.exec(cellText(root.querySelector("body")))?.[1] ?? "";
+  if (totalText.includes("未定")) return null;
+  const total = parseYen(totalText);
+  if (total !== null) {
+    const all = [...byDate.values()].reduce((sum, v) => sum + v, 0);
+    if (Math.abs(total) !== all) return null;
+  }
+
+  return { amount, date };
 }
 
 // ---------------------------------------------------------------------------

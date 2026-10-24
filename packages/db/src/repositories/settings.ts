@@ -14,6 +14,8 @@ export const DEFAULT_LOW_BALANCE_THRESHOLD = 100_000;
 export const DEFAULT_SCHEDULED_REFRESH_TIME = "06:00";
 /** F7: 引き落とし日まで何日以内なら警告するかの既定値 */
 export const DEFAULT_WITHDRAWAL_ALERT_DAYS = 7;
+export const MIN_WITHDRAWAL_ALERT_DAYS = 1;
+export const MAX_WITHDRAWAL_ALERT_DAYS = 30;
 
 export const SETTING_KEYS = {
   lowBalanceThreshold: "low_balance_threshold",
@@ -88,25 +90,27 @@ export function setScheduledRefreshTime(db: Database, value: string): void {
 }
 
 /**
- * F7: 引き落とし日まで何日以内なら警告するか。未設定・不正値は既定 7 日にフォールバック
+ * F7: 引き落とし日まで何日以内なら警告するか。1〜30 にクランプ、未設定・不正値は既定 7 日
  */
 export function getWithdrawalAlertDays(db: Database): number {
   const raw = getSetting(db, SETTING_KEYS.withdrawalAlertDays);
   if (raw === null) return DEFAULT_WITHDRAWAL_ALERT_DAYS;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? Math.round(n) : DEFAULT_WITHDRAWAL_ALERT_DAYS;
+  if (!Number.isFinite(n)) return DEFAULT_WITHDRAWAL_ALERT_DAYS;
+  return Math.min(MAX_WITHDRAWAL_ALERT_DAYS, Math.max(MIN_WITHDRAWAL_ALERT_DAYS, Math.round(n)));
 }
 
 export function setWithdrawalAlertDays(db: Database, value: number): void {
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`日数は 0 以上の数値で指定してください: ${value}`);
+  if (!Number.isFinite(value) || value < MIN_WITHDRAWAL_ALERT_DAYS || value > MAX_WITHDRAWAL_ALERT_DAYS) {
+    throw new Error(`日数は ${MIN_WITHDRAWAL_ALERT_DAYS}〜${MAX_WITHDRAWAL_ALERT_DAYS} の数値で指定してください: ${value}`);
   }
   setSetting(db, SETTING_KEYS.withdrawalAlertDays, String(Math.round(value)));
 }
 
-/** F7: 引き落とし口座（残高と比べる口座）の既定 ID。未設定は null（全口座の合計で判定） */
+/** F7: 引き落とし口座（残高と比べる口座）の ID。未設定は null */
 export function getWithdrawalAccountId(db: Database): string | null {
-  return getSetting(db, SETTING_KEYS.withdrawalAccountId);
+  const raw = getSetting(db, SETTING_KEYS.withdrawalAccountId);
+  return raw === null || raw === "" ? null : raw;
 }
 
 export function setWithdrawalAccountId(db: Database, accountId: string | null): void {

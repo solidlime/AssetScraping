@@ -1,3 +1,4 @@
+import { getAccountsGroupedByCategory } from "@asset-scraping/db";
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
 import { RefreshButton } from "../../components/RefreshButton";
@@ -9,14 +10,19 @@ export const metadata: Metadata = {
   title: "設定",
 };
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  // F7: 引き落とし口座に選べるのは銀行系口座（カード自身の負債残高は判定に使わない）
+  const withdrawalAccounts = (await getAccountsGroupedByCategory())
+    .filter((group) => group.categoryName === "銀行")
+    .flatMap((group) => group.accounts.map((a) => ({ id: a.id, name: a.name })));
+
   return (
     <PageLayout title="設定" options={<RefreshButton />}>
       <div className="space-y-6">
         <OtpForm />
         <Card>
           <CardContent className="pt-6">
-            <SettingsForm />
+            <SettingsForm withdrawalAccounts={withdrawalAccounts} />
           </CardContent>
         </Card>
         <p className="text-xs text-muted-foreground">

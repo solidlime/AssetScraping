@@ -775,13 +775,44 @@ describe("parseScheduledWithdrawal（F7: クレカの引き落とし予定額列
     expect(result).toEqual({ amount: 44_200, date: "2026-10-26" });
   });
 
-  it("複数明細は合計し、最も早い期日を採る", () => {
+  it("期日が違う明細は最早期日ぶんだけ合算する（その日には落ちない金額を返さない）", () => {
+    const result = parseScheduledWithdrawal(
+      cardPage(`<tr><td>-44,200円 (2026/10/26)</td></tr><tr><td>-31,067円 (2026/10/27)</td></tr>`),
+    );
+    expect(result).toEqual({ amount: 44_200, date: "2026-10-26" });
+  });
+
+  it("期日が同日の複数明細は合算する", () => {
     const result = parseScheduledWithdrawal(
       cardPage(
-        `<tr><td>-44,200円 (2026/10/26)</td></tr><tr><td>-31,067円 (2026/10/27)</td></tr>`,
+        `<tr><td>-44,200円 (2026/10/26)</td></tr><tr><td>-31,067円 (2026/10/26)</td></tr><tr><td>-1,000円 (2026/11/26)</td></tr>`,
       ),
     );
     expect(result).toEqual({ amount: 75_267, date: "2026-10-26" });
+  });
+
+  it("合計値があり明細合算と一致すれば通す（合計行は二重計上しない）", () => {
+    const html = `<html><body>
+      <p>引き落とし予定額合計：-75,267円</p>
+      <table>
+        <tr><th>引き落とし予定額</th></tr>
+        <tr><td>-44,200円 (2026/10/26)</td></tr>
+        <tr><td>-31,067円 (2026/10/26)</td></tr>
+        <tr><td>合計</td><td>-75,267円</td></tr>
+      </table>
+    </body></html>`;
+    expect(parseScheduledWithdrawal(html)).toEqual({ amount: 75_267, date: "2026-10-26" });
+  });
+
+  it("合計値と明細合算が食い違えば null（無警告側に倒す）", () => {
+    const html = `<html><body>
+      <p>引き落とし予定額合計：-99,999円</p>
+      <table>
+        <tr><th>引き落とし予定額</th></tr>
+        <tr><td>-44,200円 (2026/10/26)</td></tr>
+      </table>
+    </body></html>`;
+    expect(parseScheduledWithdrawal(html)).toBeNull();
   });
 
   it("「引き落とし予定額」列が無いページは null（非クレカ口座）", () => {
