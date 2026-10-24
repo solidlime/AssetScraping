@@ -1,4 +1,4 @@
-import { getAccountAlerts, getAccountsGroupedByCategory, getDb, getWithdrawalAccountState, getWithdrawalAlertDays } from "@asset-scraping/db";
+import { countUnresolvedCards, getAccountAlerts, getAccountsGroupedByCategory, getDb, getWithdrawalAccountState, getWithdrawalAlertDays } from "@asset-scraping/db";
 import { CreditCard } from "lucide-react";
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
@@ -22,23 +22,25 @@ export default async function AccountsPage() {
   const okCount = autoAccounts.filter((a) => a.status === "ok").length;
   const errorCount = autoAccounts.filter((a) => a.status === "error").length;
 
+  const db = getDb();
   // 口座警告（低残高・異常ステータス・引き落とし残高不足）。件数は**口座数**で数える
   // （同じ口座が low_balance と scheduled_withdrawal の両方に載るため、行数で数えると二重計上になる）
-  const alerts = getAccountAlerts(getDb());
+  const alerts = getAccountAlerts(db);
   const alertCount = new Set(alerts.map((a) => a.accountId)).size;
   // F7: クレカ引き落としの残高不足警告（内容を見せる）
   // 型は optional だが、kind==="scheduled_withdrawal" では生成側が必ず予定額を入れる
   // （下の JSX の `scheduledWithdrawalAmount ?? 0` は到達不能。型の都合で残している）
   const withdrawalAlerts = alerts.filter((a) => a.kind === "scheduled_withdrawal");
-  // 引き落とし口座が未設定（かつ銀行口座が複数で自動代用できない）ならその旨を出す。
-  // 注: getWithdrawalAccountState は**既定（グローバル）設定しか見ない**。カード別リンクは見ないので、
-  // 全カードにリンク済みでもここは出る（文言側で「カード別に指定済みのものは判定済み」と補足する）
-  const withdrawalAccount = getWithdrawalAccountState(getDb());
+  // 引き落とし口座が未解決のカードがある時だけ「未設定」カードを出す。
+  // 注: getWithdrawalAccountState は**既定（グローバル）設定しか見ない**ので、カード別リンクで解決できるカードは
+  // 数えない countUnresolvedCards と併用する（既定が ambiguous でも全カード個別リンク済みなら警告不要）
+  const withdrawalAccount = getWithdrawalAccountState(db);
+  const unresolvedCardCount = countUnresolvedCards(db);
   // shortage 未定義＝引き落とし口座を解決できていない警告。不足額リストには入れない（shortage ?? 0 にしない）
   const resolvedAlerts = withdrawalAlerts.filter((a) => a.shortage !== undefined);
   const unresolvedAlerts = listUnresolvedWithdrawals(withdrawalAlerts);
   const shortageRows = listWithdrawalShortages(withdrawalAlerts);
-  const alertDays = getWithdrawalAlertDays(getDb());
+  const alertDays = getWithdrawalAlertDays(db);
 
   return (
     <PageLayout
@@ -108,7 +110,8 @@ export default async function AccountsPage() {
           </CardContent>
         </Card>
       )}
-      {(withdrawalAccount.status === "ambiguous" || withdrawalAccount.status === "none") && (
+      {(withdrawalAccount.status === "ambiguous" || withdrawalAccount.status === "none") &&
+        unresolvedCardCount > 0 && (
         <Card className="mb-6">
           <CardHeader>
             <CardTitle icon={CreditCard}>既定の引き落とし口座が未設定です</CardTitle>
@@ -119,7 +122,7 @@ export default async function AccountsPage() {
                 ? "銀行口座が複数あるため、引き落とし残高の比較に使う既定の口座が決まっていません。"
                 : "銀行系の口座が見つからないため、引き落とし残高の比較ができません。"}
               設定タブで「引き落とし口座（既定）」またはカード別の引き落とし口座を選ぶと警告を出します。
-              この判定は既定値のみを見ており、カード別に指定済みのカードは個別に判定されています。
+              引き落とし口座を特定できないカードが {unresolvedCardCount} 件あります。
             </p>
           </CardContent>
         </Card>

@@ -4,7 +4,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { createDb, schema, type Database } from "../src/index.js";
 import { todayJst, saveScheduledWithdrawal } from "../src/repo.js";
-import { getAccountAlerts, getWithdrawalAccountState, type AccountAlert } from "../src/repositories/alerts.js";
+import {
+  countUnresolvedCards,
+  getAccountAlerts,
+  getUpcomingWithdrawals,
+  getWithdrawalAccountState,
+  type AccountAlert,
+} from "../src/repositories/alerts.js";
 import {
   DEFAULT_WITHDRAWAL_ALERT_DAYS,
   getWithdrawalAccountId,
@@ -475,5 +481,135 @@ describe("getAccountAlerts / カード別引き落とし口座", () => {
     seedCard("card-rakuten", "楽天カード", { amount: 60_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
     seedCard("card-paypay", "PayPayカード", { amount: 50_000, date: dayOffset(40), withdrawalAccountId: "bank-rakuten" });
     expect(scheduledKinds()).toHaveLength(0);
+  });
+});
+
+// F7 フォローアップ: 「既定が未設定」表示の判定。カード別リンクで解決できるカードは数えない
+describe("countUnresolvedCards", () => {
+  it("全カードにリンク済みなら 0（既定なし・銀行2件でも）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3), withdrawalAccountId: "bank-1" });
+    seedCard("card-2", "楽天カード", { amount: 60_000, date: dayOffset(5), withdrawalAccountId: "bank-2" });
+    // グローバル既定は未設定（銀行2件なので ambiguous）
+    expect(getWithdrawalAccountState(db).status).toBe("ambiguous");
+    expect(countUnresolvedCards(db)).toBe(0);
+  });
+
+  it("リンク無しカードが1枚あれば 1（既定なし・銀行2件）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3), withdrawalAccountId: "bank-1" });
+    seedCard("card-2", "楽天カード", { amount: 60_000, date: dayOffset(5) });
+    expect(countUnresolvedCards(db)).toBe(1);
+  });
+
+  it("グローバル既定が set ならリンク無しカードも解決できるので 0", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    seedCard("card-1", "楽天カード", { amount: 60_000, date: dayOffset(5) });
+    setSetting(db, SETTING_KEYS.withdrawalAccountId, "bank-1");
+    expect(countUnresolvedCards(db)).toBe(0);
+  });
+
+  it("カードが1枚も無ければ 0", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    expect(countUnresolvedCards(db)).toBe(0);
+  });
+
+  it("リンク先が解決できない（rows に出てこない口座）カードは未解決として数える", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    // accounts 行だけあってステータス行が無い（loadAlertRows の INNER JOIN で落ちる）。
+    // 実 DB は withdrawal_account_id に FK があるので「存在しない ID」は挿入できず、この形が再現経路
+    seedAccountWithoutStatus("ghost-bank", "消えた銀行");
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3), withdrawalAccountId: "ghost-bank" });
+    expect(countUnresolvedCards(db)).toBe(1);
+  });
+
+  it("リンク先がカード口座なら未解決として数える", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3), withdrawalAccountId: "bank-1" });
+    seedCard("card-2", "楽天カード", { amount: 60_000, date: dayOffset(5), withdrawalAccountId: "card-1" });
+    expect(countUnresolvedCards(db)).toBe(1);
+  });
+
+  it("予定額・期日を持たないカードは数えない（比較対象が無い）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    seedAccount("bank-2", "みどり銀行", "みどり銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: null, date: null });
+    expect(countUnresolvedCards(db)).toBe(0);
+  });
+});
+
+// ダッシュボード用: 不足していなくても窓内の引き落とし予定を返す
+describe("getUpcomingWithdrawals", () => {
+  it("残高が足りていても窓内の予定を返す（getAccountAlerts との違い）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000, "ok", seedBankCategory());
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    // 警告側は不足していないので空
+    expect(scheduledKinds()).toHaveLength(0);
+    const upcoming = getUpcomingWithdrawals(db);
+    expect(upcoming).toHaveLength(1);
+    expect(upcoming[0]).toMatchObject({
+      accountId: "card-1",
+      accountName: "三井住友カード",
+      amount: 75_267,
+      date: dayOffset(3),
+      remainingDays: 3,
+      withdrawalAccountId: "bank-1",
+      withdrawalAccountName: "青空銀行",
+      balance: 200_000,
+    });
+    expect(upcoming[0]?.shortage).toBeUndefined();
+  });
+
+  it("窓外（alertDays 超過）の予定は返さない", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
+    seedCard("card-2", "楽天カード", { amount: 30_000, date: dayOffset(40) });
+    expect(getUpcomingWithdrawals(db).map((u) => u.accountId)).toEqual(["card-1"]);
+  });
+
+  it("金額・期日が欠損の行は返さない", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-1", "三井住友カード", { amount: null, date: dayOffset(1) });
+    seedCard("card-2", "楽天カード", { amount: 30_000, date: null });
+    expect(getUpcomingWithdrawals(db)).toHaveLength(0);
+  });
+
+  it("同一口座を共有する2枚は shortage が合算値になる", () => {
+    seedAccount("bank-rakuten", "楽天銀行", "楽天銀行", 100_000);
+    seedCard("card-rakuten", "楽天カード", { amount: 60_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
+    seedCard("card-paypay", "PayPayカード", { amount: 50_000, date: dayOffset(5), withdrawalAccountId: "bank-rakuten" });
+    const byCard = new Map(getUpcomingWithdrawals(db).map((u) => [u.accountId, u]));
+    // 合算 110,000 - 100,000 = 10,000（カード単位ではない）
+    expect(byCard.get("card-rakuten")?.shortage).toBe(10_000);
+    expect(byCard.get("card-paypay")?.shortage).toBe(10_000);
+  });
+
+  it("期日昇順で並ぶ", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-late", "あとで", { amount: 30_000, date: dayOffset(6) });
+    seedCard("card-soon", "すぐ", { amount: 30_000, date: dayOffset(2) });
+    expect(getUpcomingWithdrawals(db).map((u) => u.accountId)).toEqual(["card-soon", "card-late"]);
+  });
+
+  it("過去日の予定は返さない", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-past", "すぎた", { amount: 30_000, date: dayOffset(-1) });
+    seedCard("card-today", "今日", { amount: 30_000, date: dayOffset(0) });
+    expect(getUpcomingWithdrawals(db).map((u) => u.accountId)).toEqual(["card-today"]);
+  });
+
+  it("引き落とし口座を解決できない行は note 付きで返す", () => {
+    seedAccountWithoutStatus("ghost-bank", "消えた銀行");
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3), withdrawalAccountId: "ghost-bank" });
+    const [upcoming] = getUpcomingWithdrawals(db);
+    expect(upcoming?.note).toBe("（引き落とし口座を解決できませんでした）");
+    expect(upcoming?.shortage).toBeUndefined();
+    expect(upcoming?.withdrawalAccountId).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ import { AssetHistoryChart } from "../components/info/asset-history-chart";
 import { DailyChangeCard } from "../components/info/daily-change-card";
 import { MonthlyBalanceCard } from "../components/info/monthly-balance-card";
 import { MonthlyIncomeExpenseChart } from "../components/info/monthly-income-expense-chart";
+import { UpcomingWithdrawalsCard } from "../components/info/upcoming-withdrawals-card";
 import { PageLayout } from "../components/layout/page-layout";
 
 export const metadata: Metadata = {
@@ -22,6 +23,8 @@ export default async function DashboardPage() {
         <AssetBreakdownChart className="lg:col-span-2" />
         <MonthlyBalanceCard />
       </div>
+
+      <UpcomingWithdrawalsCard />
 
       {showDailyChange && <DailyChangeCard />}
 

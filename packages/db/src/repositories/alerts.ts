@@ -166,16 +166,28 @@ function resolveCardSource(
   return { source: null };
 }
 
-function buildScheduledWithdrawalAlerts(
+/** 窓内の1行とその解決先 */
+interface ResolvedWithdrawalRow {
+  row: AlertRow;
+  source: ResolvedSource | null;
+  note?: string;
+}
+
+/**
+ * 窓内（today から alertDays 日以内）の引き落とし予定行を抽出し、カード別リンク→グローバル既定の順で
+ * 引き落とし口座を解決して、解決先口座ごとの合算額を返す。警告（不足時のみ）と予定一覧（常時）で共有する。
+ * 窓内に行が無ければ null。
+ */
+function resolveWithdrawalWindow(
   rows: AlertRow[],
   opts: { alertDays: number; withdrawalAccountId: string | null; today: string },
-): AccountAlert[] {
+): { resolved: ResolvedWithdrawalRow[]; totals: Map<string, number> } | null {
   const inWindow = rows.filter((row) => {
     if (row.scheduledWithdrawalAmount === null || row.scheduledWithdrawalDate === null) return false;
     const remaining = daysUntil(opts.today, row.scheduledWithdrawalDate);
     return remaining >= 0 && remaining <= opts.alertDays;
   });
-  if (inWindow.length === 0) return [];
+  if (inWindow.length === 0) return null;
 
   const fallback = resolveWithdrawalAccount(rows, opts.withdrawalAccountId);
   const resolved = inWindow.map((row) => ({
@@ -190,6 +202,17 @@ function buildScheduledWithdrawalAlerts(
     if (!source) continue;
     totals.set(source.accountId, (totals.get(source.accountId) ?? 0) + (row.scheduledWithdrawalAmount as number));
   }
+
+  return { resolved, totals };
+}
+
+function buildScheduledWithdrawalAlerts(
+  rows: AlertRow[],
+  opts: { alertDays: number; withdrawalAccountId: string | null; today: string },
+): AccountAlert[] {
+  const window = resolveWithdrawalWindow(rows, opts);
+  if (window === null) return [];
+  const { resolved, totals } = window;
 
   const alerts: AccountAlert[] = [];
   for (const { row, source, note } of resolved) {
@@ -221,6 +244,92 @@ function buildScheduledWithdrawalAlerts(
     });
   }
   return alerts;
+}
+
+/** ダッシュボード表示用: 窓内の引き落とし予定1件 */
+export interface UpcomingWithdrawal {
+  accountId: string;
+  accountName: string;
+  institution: string;
+  amount: number;
+  /** 引き落とし予定日 (YYYY-MM-DD) */
+  date: string;
+  remainingDays: number;
+  /** 引き落とし元口座（解決できなければ undefined） */
+  withdrawalAccountName?: string;
+  withdrawalAccountId?: string;
+  /** 解決できた場合のみ: 引き落とし元口座の残高 */
+  balance?: number;
+  /** 解決できた場合のみ: 口座単位の合算不足額（不足が無ければ undefined） */
+  shortage?: number;
+  note?: string;
+}
+
+/**
+ * 窓内（alertDays 日以内）の引き落とし予定一覧。**不足していなくても返す**。
+ * /accounts の警告（不足時のみ）とは別に、ダッシュボードで予定を見せる用途。
+ * 並び: 期日昇順 → 金額降順 → accountId 昇順。
+ */
+export function getUpcomingWithdrawals(
+  db: Database,
+  opts: { withdrawalAlertDays?: number; withdrawalAccountId?: string | null; today?: string } = {},
+): UpcomingWithdrawal[] {
+  const today = opts.today ?? todayJst();
+  const window = resolveWithdrawalWindow(loadAlertRows(db), {
+    alertDays: clampWithdrawalAlertDays(opts.withdrawalAlertDays ?? getWithdrawalAlertDays(db)),
+    withdrawalAccountId:
+      opts.withdrawalAccountId !== undefined ? opts.withdrawalAccountId : getWithdrawalAccountId(db),
+    today,
+  });
+  if (window === null) return [];
+  const { resolved, totals } = window;
+
+  const upcoming = resolved.map(({ row, source, note }): UpcomingWithdrawal => {
+    const date = row.scheduledWithdrawalDate as string;
+    const base = {
+      accountId: row.accountId,
+      accountName: row.accountName,
+      institution: row.institution,
+      amount: row.scheduledWithdrawalAmount as number,
+      date,
+      remainingDays: daysUntil(today, date),
+    };
+    if (!source) return { ...base, ...(note !== undefined ? { note } : {}) };
+    const total = totals.get(source.accountId) ?? 0;
+    return {
+      ...base,
+      withdrawalAccountName: source.accountName || undefined,
+      withdrawalAccountId: source.accountId,
+      balance: source.balance,
+      ...(total > source.balance ? { shortage: total - source.balance } : {}),
+      ...(note !== undefined ? { note } : {}),
+    };
+  });
+
+  return upcoming.sort((x, y) => {
+    if (x.date !== y.date) return x.date < y.date ? -1 : 1;
+    if (x.amount !== y.amount) return y.amount - x.amount;
+    return x.accountId < y.accountId ? -1 : x.accountId > y.accountId ? 1 : 0;
+  });
+}
+
+/**
+ * カード別リンクでも既定でも引き落とし口座を解決できないカードの件数。
+ * 既定が未決（ambiguous/none）でも全カードが個別リンクで解決できるなら
+ * 「未設定」警告は不要 — web の /accounts の表示条件に使う。
+ * 比較対象（予定額・期日）を持たないカードは数えない（実際には警告対象にならないため）。
+ * loadAlertRows は accountStatuses に INNER JOIN するので、ステータス行が無いカードはそもそも対象外（無警告側に倒れる）。
+ */
+export function countUnresolvedCards(db: Database): number {
+  const rows = loadAlertRows(db);
+  const fallback = resolveWithdrawalAccount(rows, getWithdrawalAccountId(db));
+  return rows.filter(
+    (row) =>
+      isCardRow(row) &&
+      row.scheduledWithdrawalAmount !== null &&
+      row.scheduledWithdrawalDate !== null &&
+      resolveCardSource(row, rows, fallback).source === null,
+  ).length;
 }
 
 /** 警告判定に使う口座×ステータスの平坦な行。本番 DB は category_id 未充填なので category も併用する */
