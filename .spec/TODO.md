@@ -26,6 +26,14 @@
 - [x] T020: mcp — `get_account_alerts` に `scheduled_withdrawal` kind を追加（後方互換、判定口座名は `withdrawalAccountName`）
 - [x] T021: 検証 — typecheck / db 135 / crawler 111 / web 8 passed、ルアン・メェイのレビュー PASS
 
+## 優先度：高（F8: 詳細ページとスクレイピング元の乖離修正 — kanban #6）
+- [x] T022: crawler — `/cf` 明細を「保有金融機関」列（index 4）で口座別に振り分け（`scrape.ts` の全件 `accounts[0]` 固定を解消。36件全部イオン銀行の直接原因）。前方一致（最長優先）で解決し、未解決行はスキップ＋`warn`＋`transactionsSkipped` 計上（`accounts[0]` フォールバックは廃止）
+- [x] T023: crawler — 明細の「中項目」を `sub_category` へ分離、金額の `(振替)` を `is_transfer`/`transfer_target` へ（`parse.ts` / `repo.ts`）。併せて `firstLineText` でセル内改行（`<br>` と生 `\n` の両方）の1行目だけを取る
+- [x] T024: crawler — カード「ご利用残高」の `liability_category` は**設定しない**方針に変更（`estimateAssetCategory` が `categoryName` を返すため Badge は `categoryName ?? liabilityCategory` で常に「その他」になり表示経路が存在しない＝死んだデータ。カード残高は web の `cardDebt` が `holdings.value` 合計で担当。`type` を `liability` にすると負債一覧と二重計上するため触らない）
+- [x] T025: web/db — 詳細ページに「引き落とし予定額・予定日」「中項目」「取得エラー」を表示し、クレカは「残高」でなく「ご利用残高／引き落とし予定」を出す（`queries/account.ts` の select 補充 + `page.tsx` 表示）
+- [ ] T026: 検証 — テスト・`tsc --noEmit`・`next build` は完了（crawler 137 / db 165 / web 13 tests、4パッケージ型 OK、build 成功）。**残り**: ① `packages/db/src/scripts/fix-fallback-transactions.ts` を本番 DB へ `--dry-run`（`--db /data/asset-scraping.db` 明示）→ 対象36行・`external_id IS NULL` 36行・対象口座名 `イオン銀行` を目視 → `--apply` で旧36行削除＋`liability_category` NULL 化 ② 再スクレイプ ③ SSNB 実表示と突き合わせ（36行が6口座へ振り分き、イオン銀行 0 行）
+- [x] T027: F8 再レビュー指摘対応 — `parse.test.ts` を実測 name 12件に更新（SBI新生銀行/北國銀行/北陸労働金庫/SBI証券/SBIベネフィットシステムズ 等、実測セル7行＝6口座を固定）、`normalizeMinus` に U+FF0D/U+2013 追加（`Number("−345873")` が NaN になるのが真因だったため `\s` 除去も実施）、`ScrapeRun.transactionsSkipped` 追加、`UpsertAccountInput.category` を `StoredAccountCategory` 化、旧世代 transactions 移行スクリプト `packages/db/src/scripts/fix-fallback-transactions.ts`（既定 dry-run、`--apply` で削除＋`liability_category` NULL 化、存在しない account_id と混在は中断）
+
 ## 優先度：中
 - [ ] T010: README・ドキュメント整備
 
