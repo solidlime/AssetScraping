@@ -9,7 +9,6 @@ import type {
 } from "@asset-scraping/shared";
 import { buildTransactionExternalId } from "@asset-scraping/shared";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, sql } from "drizzle-orm";
-import { categorizeDbTransaction } from "./shared/categorize.ts";
 import type { Database } from "./client.ts";
 import { getOrCreateCategory } from "./repositories/categories.ts";
 import {
@@ -445,16 +444,11 @@ export function upsertTransactions(db: Database, rows: Transaction[]): void {
           occurrence,
         );
       }
-      // ssnb に大項目・中項目が無い行は内容ベース推定で補完する（crawler categorize.ts
-      // と同じ本家 seed カテゴリ体系。db 側に重複実装しないため、
-      // crawler 側がすでに推定済みなら t.category / t.subCategory を優先する）。
-      // 片方だけ null のケース（中項目だけ欠落）でも欠落側を補完するため独立判定にする。
-      const fallback =
-        t.category === null || t.subCategory == null
-          ? categorizeDbTransaction(t.description)
-          : null;
-      const category = t.category ?? fallback?.category ?? null;
-      const subCategory = t.subCategory ?? fallback?.subCategory ?? null;
+      // 大項目・中項目は crawler 側で確定済み（列が無いページのみ crawler が内容推定する）。
+      // db 層で再推定すると、ssnb で空セルの行（楽天カードの楽天市場振替など）に
+      // 本家に存在しないカテゴリを捏造し、詳細ページが SSNB 実表示と乖離する。
+      const category = t.category ?? null;
+      const subCategory = t.subCategory ?? null;
       const isTransfer = t.isTransfer ?? false;
       const transferTarget = t.transferTarget ?? null;
       tx.insert(transactions)
