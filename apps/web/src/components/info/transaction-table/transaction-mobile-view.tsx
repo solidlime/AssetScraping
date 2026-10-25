@@ -1,7 +1,7 @@
 import { getCategoryColor } from "../../../lib/colors";
 import { formatDate } from "../../../lib/format";
 import { cn } from "../../../lib/cn";
-import { signedTransactionAmount, UNCATEGORIZED } from "../../../lib/transaction-utils";
+import { signedTransactionAmount } from "../../../lib/transaction-utils";
 import { AmountDisplay } from "../../ui/amount-display";
 import { Badge } from "../../ui/badge";
 import { EmptyState } from "../../ui/empty-state";
@@ -33,17 +33,19 @@ export function TransactionMobileView({ transactions }: TransactionMobileViewPro
                   {transaction.description || "-"}
                 </p>
                 <div className="mt-1 flex flex-wrap items-center gap-1">
-                  <Badge
-                    style={{
-                      backgroundColor: `color-mix(in srgb, ${getCategoryColor(transaction.category ?? UNCATEGORIZED)} 15%, transparent)`,
-                      borderColor: getCategoryColor(transaction.category ?? UNCATEGORIZED),
-                    }}
-                    className="border text-foreground"
-                  >
-                    {transaction.category ?? UNCATEGORIZED}
-                  </Badge>
+                  {transaction.category ? (
+                    <Badge
+                      style={{
+                        backgroundColor: `color-mix(in srgb, ${getCategoryColor(transaction.category)} 15%, transparent)`,
+                        borderColor: getCategoryColor(transaction.category),
+                      }}
+                      className="border text-foreground"
+                    >
+                      {transaction.category}
+                    </Badge>
+                  ) : null}
                   <span className="text-xs text-muted-foreground">
-                    {transaction.subCategory ?? UNCATEGORIZED}
+                    {transaction.subCategory}
                   </span>
                   {transaction.accountName && (
                     <span className="text-xs text-muted-foreground">

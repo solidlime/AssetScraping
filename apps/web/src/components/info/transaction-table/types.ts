@@ -2,7 +2,7 @@ export interface Transaction {
   id: number;
   date: string;
   category: string | null;
-  /** 必須にして mapper の写し漏れを tsc で捕まえる（null は「未分類」表示） */
+  /** 必須にして mapper の写し漏れを tsc で捕まえる（null は SSNB 同様に空表示） */
   subCategory: string | null;
   description: string | null;
   amount: number;
