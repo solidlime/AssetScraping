@@ -134,7 +134,12 @@ function cellText(cell: HtmlElement | null | undefined): string {
     .trim();
 }
 
-/** セルテキストの 1 行目だけ（セル内改行・<br> を保ったまま空白圧縮・トリム） */
+/**
+ * セルテキストの 1 行目だけ（セル内改行・<br> を保ったまま空白圧縮・トリム）。
+ * 実測のセルは HTML 整形由来で**先頭に改行を持つ**（"\\n三井住友カード (VpassID)\\n<div>…"）。
+ * 先頭固定で [0] を取ると空文字になり、保有金融機関の解決が全滅する。
+ * 空行を読み飛ばして最初の非空行を返す。
+ */
 function firstLineText(cell: HtmlElement | null | undefined): string {
   if (!cell) return "";
   const raw = cell.childNodes
@@ -144,7 +149,7 @@ function firstLineText(cell: HtmlElement | null | undefined): string {
         : visibleText(child),
     )
     .join("");
-  return raw.split(/\r?\n/)[0]!.replace(/\s+/g, " ").trim();
+  return raw.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).find((line) => line.length > 0) ?? "";
 }
 
 /**

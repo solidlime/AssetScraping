@@ -796,6 +796,29 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
     expect(rows.map((t) => t.accountId)).toEqual(["rakuten-card", "smcc"]);
   });
 
+  it("セルの先頭に改行があっても最初の非空行を保有金融機関として解決する", () => {
+    // 実測 cell は HTML 整形由来で先頭に改行を持つ（"\n三井住友カード (VpassID)\n<div>…"）。
+    // 先頭固定で [0] を取ると空文字になり、その行が warn 付きでスキップされていた
+    const raw = `
+    <table class="table table-hover">
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th></tr></thead>
+      <tbody>
+        <tr><td>10/13(火)</td><td>SBI証券投信積立サ-ビス(翌月買付分)</td><td>-10,000</td><td>
+三井住友カード (VpassID)
+<div class="noform transfer_account_box">未設定</div>
+</td></tr>
+        <tr><td>10/02(金)</td><td>静岡県沼津市 ラクテンイチバ702520</td><td>-1,000</td><td>
+楽天カード
+<div class="transfer_account_box">楽天市場(my Rakuten)</div>
+</td></tr>
+      </tbody>
+    </table>`;
+    const counters = { transactionsSkipped: 0 };
+    const rows = parseTransactions(raw, REAL_ACCOUNTS, new Date(2026, 9, 14), counters);
+    expect(rows.map((t) => t.accountId)).toEqual(["smcc", "rakuten-card"]);
+    expect(counters.transactionsSkipped).toBe(0);
+  });
+
   it("複数の口座名が保有金融機関名で始まるなら name 最長を選ぶ", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const longest = parseTransactions(
