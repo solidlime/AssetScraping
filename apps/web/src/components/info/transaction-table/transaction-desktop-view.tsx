@@ -1,6 +1,7 @@
 import { getCategoryColor } from "../../../lib/colors";
 import { formatDate } from "../../../lib/format";
 import { cn } from "../../../lib/cn";
+import { signedTransactionAmount, UNCATEGORIZED } from "../../../lib/transaction-utils";
 import { AmountDisplay } from "../../ui/amount-display";
 import { Badge } from "../../ui/badge";
 import { EmptyState } from "../../ui/empty-state";
@@ -89,26 +90,29 @@ export function TransactionDesktopView({
                 <TableCell>
                   <Badge
                     style={{
-                      backgroundColor: `color-mix(in srgb, ${getCategoryColor(transaction.category ?? "振替")} 15%, transparent)`,
-                      borderColor: getCategoryColor(transaction.category ?? "振替"),
+                      backgroundColor: `color-mix(in srgb, ${getCategoryColor(transaction.category ?? UNCATEGORIZED)} 15%, transparent)`,
+                      borderColor: getCategoryColor(transaction.category ?? UNCATEGORIZED),
                     }}
                     className="border text-foreground"
                   >
-                    {transaction.category ?? "振替"}
+                    {transaction.category ?? UNCATEGORIZED}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
-                  {transaction.subCategory || ""}
+                  {transaction.subCategory ?? UNCATEGORIZED}
                 </TableCell>
                 <TableCell>
                   <TypeBadge type={transaction.type} isTransfer={transaction.isTransfer} />
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {transaction.institution ?? transaction.accountName ?? "-"}
+                  {transaction.isTransfer && transaction.transferTarget && (
+                    <span className="block text-xs">{transaction.transferTarget}</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-right">
                   <AmountDisplay
-                    amount={transaction.amount}
+                    amount={signedTransactionAmount(transaction)}
                     type={
                       transaction.type === "income"
                         ? "income"

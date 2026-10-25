@@ -15,6 +15,7 @@ function toUiTransactions(rows: Awaited<ReturnType<typeof getMfTransactions>>) {
     id: t.id,
     date: t.date,
     category: t.category,
+    subCategory: t.subCategory,
     description: t.description,
     amount: t.amount,
     type: t.type ?? "transfer",

@@ -4,6 +4,7 @@ import {
   filterTransactions,
   filterTransactionsByYear,
   sortTransactions,
+  UNCATEGORIZED,
 } from "../../../lib/transaction-utils";
 import type { SortColumn, Transaction, TransactionKpi } from "./types";
 
@@ -103,7 +104,7 @@ export function useTransactionFiltering({
 
   // Get unique categories with count, sorted by count descending
   const { keys: categories, countMap: categoryCount } = useMemo(
-    () => getSortedCountMap(transactionsInSelectedYear, (t) => t.category ?? "振替"),
+    () => getSortedCountMap(transactionsInSelectedYear, (t) => t.category ?? UNCATEGORIZED),
     [transactionsInSelectedYear],
   );
 

@@ -717,7 +717,11 @@ export function parseTransactions(
 
   const headerRow = table.querySelectorAll("tr").find((tr) => tr.querySelectorAll("td").length === 0);
   if (!headerRow) throw new ScrapeParseError("取引明細テーブルのヘッダ行が見つかりません");
-  const header = headerRow.querySelectorAll("th").map((th) => headerKey(cellText(th)));
+  // ヘッダ th は cellText で読むな。ssnb /cf の大項目・中項目 th は絞り込み用 <select> を
+  // 内包し（実測 innerText "大項目 \n\n全て\n収入\n…"）、cellText だとラベルが option 群に
+  // 連結されて indexOf("大項目") が -1 になる。firstLineText なら th[0]="計算" …
+  // th[5]="大項目", th[6]="中項目" と取れる。
+  const header = headerRow.querySelectorAll("th").map((th) => headerKey(firstLineText(th)));
   const idx = (name: string) => header.indexOf(name);
   const dateIdx = idx("日付");
   const descIdx = idx("内容");
@@ -740,6 +744,10 @@ export function parseTransactions(
     // 保有金融機関: セル内改行の 1 行目のみ（"楽天カード\n楽天市場(my Rakuten)" → "楽天カード"）
     const institution =
       institutionIdx >= 0 ? firstLineText(tds[institutionIdx]) : "";
+    // 振替先は同じセルの 2 行目 <div class="transfer_account_box">（実測）。
+    // 「振替」列(index 8) は実測で全行空なので情報源にしない。
+    const transferAccount =
+      institutionIdx >= 0 ? cellText(tds[institutionIdx]?.querySelector(".transfer_account_box")) : "";
     const accountId = resolveTransactionAccountId(institution, accounts);
     if (!accountId) {
       // どの口座（保有金融機関セル）のどの行で落ちたか分かるように warn する
@@ -773,7 +781,8 @@ export function parseTransactions(
       category,
       subCategory,
       isTransfer,
-      transferTarget: isTransfer ? institution || description : null,
+      // 未設定（VpassID 等で振替先未登録）は振替先なしとして null
+      transferTarget: isTransfer && transferAccount !== "未設定" ? transferAccount || null : null,
     });
   }
   return txs;

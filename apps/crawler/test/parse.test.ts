@@ -662,7 +662,9 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         category: "食費",
         subCategory: "食料品",
         isTransfer: true,
-        transferTarget: "三井住友カード (VpassID)",
+        // 振替先は保有金融機関セルの .transfer_account_box からのみ取る。
+        // この fixture は box を持たない簡易セルなので null（実構造は専用テストが見る）
+        transferTarget: null,
       },
       {
         externalId: expect.any(String),
@@ -684,7 +686,8 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
         category: null,
         subCategory: null,
         isTransfer: true,
-        transferTarget: "楽天カード",
+        // 保有金融機関セルに transfer_account_box が無い（旧 fixture）ため振替先は null
+        transferTarget: null,
       },
     ]);
   });
@@ -819,6 +822,89 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
     expect(counters.transactionsSkipped).toBe(0);
   });
 
+  // 実測 SSNB /cf ヘッダ行（2026-10）。大項目・中項目 th は <select> を内包しているため
+  // cellText で読むと "大項目 全て 収入 …" に潰れ、header.indexOf("大項目") が -1 になる。
+  // th[0] は <br> 区切りで innerText "計算\n対象\n"。
+  const SSNB_HEADER = `
+      <tr>
+        <th> 計算 <br> 対象 <br> <i class="icon-question-sign"></i> </th>
+        <th>日付</th>
+        <th>内容</th>
+        <th>金額（円）</th>
+        <th>保有金融機関</th>
+        <th> 大項目 <i class="icon-question-sign"></i> <br>
+          <select class="form-horizontal" id="large-category">
+            <option value="">全て</option><option value="/large/income">収入</option><option value="/large/food">食費</option><option value="/large/hobby">趣味・娯楽</option><option value="/large/car">自動車</option><option value="/large/tax">税・社会保障</option><option value="">未分類</option>
+          </select>
+        </th>
+        <th> 中項目 <i class="icon-question-sign"></i> <br>
+          <select class="form-horizontal" id="small-category">
+            <option value="">全て</option><option value="/small/salary">給与</option><option value="/small/eating">外食</option><option value="/small/hardware">ハードウェア</option><option value="/small/car-care">車検・整備</option><option value="">未分類</option>
+          </select>
+        </th>
+        <th>メモ</th>
+        <th>振替</th>
+        <th>削除</th>
+      </tr>`;
+  const ssnbTable = (rows: string) => `
+    <table class="table table-hover">
+      <thead>${SSNB_HEADER}</thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  it("ヘッダ th が <select> を内包していても大項目/中項目の列位置を解決する", () => {
+    // AMAZON.CO.JP は内容ベース推定だと 日用品/日用品 になるが、SSNB 実表示は 趣味・娯楽/ハードウェア。
+    // ヘッダ解決が壊れると推定値にフォールバックして乖離する（実測 36 行中 28 行）。
+    const rows = `
+        <tr><td><input type="checkbox"></td><td>10/02(金)</td><td>AMAZON.CO.JP</td><td>-3,980</td><td>楽天カード</td><td>趣味・娯楽</td><td>ハードウェア</td><td></td><td></td><td></td></tr>
+        <tr><td><input type="checkbox"></td><td>10/03(土)</td><td>国税</td><td>-12,000</td><td>イオン銀行</td><td>税・社会保障</td><td>その他税・社会保障</td><td></td><td></td><td></td></tr>`;
+    const txs = parseTransactions(ssnbTable(rows), REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(txs.map((t) => [t.category, t.subCategory])).toEqual([
+      ["趣味・娯楽", "ハードウェア"],
+      ["税・社会保障", "その他税・社会保障"],
+    ]);
+  });
+
+  it("大項目・中項目の 未分類 を null に潰さずそのまま保存する", () => {
+    // 未分類 は空セルと違い SSNB 側の明示的な値。null にすると web で未分類/その他扱いに化ける
+    const rows = `
+        <tr><td><input type="checkbox"></td><td>10/06(火)</td><td>謎の支出</td><td>-1,000</td><td>楽天カード</td><td>未分類</td><td>未分類</td><td></td><td></td><td></td></tr>`;
+    const txs = parseTransactions(ssnbTable(rows), REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(txs[0]).toMatchObject({ category: "未分類", subCategory: "未分類" });
+  });
+
+  it("大項目・中項目セルが空なら推定値にフォールバックし、推定不能なら null", () => {
+    // ラクテンイチバ 3 行は大項目・中項目セルが空 <td></td>（実測）。これは推定でよい
+    const rows = `
+        <tr><td><input type="checkbox"></td><td>10/02(金)</td><td>静岡県沼津市 ラクテンイチバ702520</td><td>-1,000</td><td>楽天カード</td><td></td><td></td><td></td><td></td><td></td></tr>
+        <tr><td><input type="checkbox"></td><td>10/03(土)</td><td>謎の入金</td><td>1</td><td>楽天カード</td><td></td><td></td><td></td><td></td><td></td></tr>`;
+    const txs = parseTransactions(ssnbTable(rows), REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(txs[0]).toMatchObject({ category: "食費", subCategory: "食料品" });
+    expect(txs[1]).toMatchObject({ category: null, subCategory: null });
+  });
+
+  it("振替先は保有金融機関セルの .transfer_account_box から取る（未設定は null）", () => {
+    // 実測: 振替列(index 8) は全行空で、振替先は保有金融機関セル 2 行目の div に入っている
+    const rows = `
+        <tr><td><input type="checkbox"></td><td>10/02(金)</td><td>静岡県沼津市 ラクテンイチバ702520</td><td>-1,000\n(振替)</td><td>
+楽天カード
+<div class="transfer_account_box">楽天市場(my Rakuten)</div>
+</td><td>食費</td><td>食料品</td><td></td><td></td><td></td></tr>
+        <tr><td><input type="checkbox"></td><td>10/13(火)</td><td>SBI証券投信積立サ-ビス(翌月買付分)</td><td>-10,000\n(振替)</td><td>
+三井住友カード (VpassID)
+<div class="noform transfer_account_box">
+<a class="disable-link-color" role="button">未設定</a>
+<i class="icon-pencil pull-right"></i></div>
+</td><td>投資</td><td>積立</td><td></td><td></td><td></td></tr>
+        <tr><td><input type="checkbox"></td><td>10/05(月)</td><td>給与</td><td>300,000</td><td>イオン銀行</td><td>収入</td><td>給与</td><td></td><td></td><td></td></tr>`;
+    const txs = parseTransactions(ssnbTable(rows), REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(txs.map((t) => [t.isTransfer, t.transferTarget])).toEqual([
+      [true, "楽天市場(my Rakuten)"],
+      [true, null],
+      [false, null],
+    ]);
+  });
+
   it("複数の口座名が保有金融機関名で始まるなら name 最長を選ぶ", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const longest = parseTransactions(
@@ -838,7 +924,7 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
     expect(txs[0]).toMatchObject({
       amount: -22000,
       isTransfer: true,
-      transferTarget: "三井住友カード (VpassID)",
+      transferTarget: null,
     });
     expect(txs[1]).toMatchObject({ amount: 300000, isTransfer: false, transferTarget: null });
   });
