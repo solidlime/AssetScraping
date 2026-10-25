@@ -616,7 +616,10 @@ export function getTransactions(
       description: transactions.description,
       amount: transactions.amount,
       category: transactions.category,
+      subCategory: transactions.subCategory,
       type: transactions.type,
+      isTransfer: transactions.isTransfer,
+      transferTarget: transactions.transferTarget,
     })
     .from(transactions)
     .orderBy(desc(transactions.date), desc(transactions.id));
@@ -631,6 +634,9 @@ export function getTransactions(
     description: t.description,
     amount: t.type === "expense" ? -t.amount : t.amount,
     category: t.category,
+    subCategory: t.subCategory,
+    isTransfer: t.isTransfer,
+    transferTarget: t.transferTarget,
   }));
 }
 

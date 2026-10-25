@@ -170,6 +170,9 @@ describe("repo round-trip", () => {
         description: "食費",
         amount: -3000,
         category: "食費",
+        subCategory: "外食",
+        isTransfer: true,
+        transferTarget: "楽天銀行",
       },
       // 同一 externalId は重複投入されないこと
       {
@@ -204,6 +207,12 @@ describe("repo round-trip", () => {
 
     const txs = getTransactions(db);
     expect(txs).toHaveLength(2);
+    // subCategory / isTransfer / transferTarget も select から漏らさず返す
+    expect(txs.find((t) => t.date === "2026-02-11")).toMatchObject({
+      subCategory: "外食",
+      isTransfer: true,
+      transferTarget: "楽天銀行",
+    });
 
     const monthly = getMonthlySummary(db);
     expect(monthly).toHaveLength(1);
