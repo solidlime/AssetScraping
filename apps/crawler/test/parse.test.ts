@@ -873,12 +873,27 @@ describe("parseTransactions（/cf の取引明細テーブル）", () => {
     expect(txs[0]).toMatchObject({ category: "未分類", subCategory: "未分類" });
   });
 
-  it("大項目・中項目セルが空なら推定値にフォールバックし、推定不能なら null", () => {
-    // ラクテンイチバ 3 行は大項目・中項目セルが空 <td></td>（実測）。これは推定でよい
+  it("大項目・中項目セルが空なら category / subCategory は null（推定しない）", () => {
+    // ラクテンイチバ 行は大項目・中項目セルが空 <td></td>（実測）。SSNB 厳密一致のため推定しない
     const rows = `
         <tr><td><input type="checkbox"></td><td>10/02(金)</td><td>静岡県沼津市 ラクテンイチバ702520</td><td>-1,000</td><td>楽天カード</td><td></td><td></td><td></td><td></td><td></td></tr>
         <tr><td><input type="checkbox"></td><td>10/03(土)</td><td>謎の入金</td><td>1</td><td>楽天カード</td><td></td><td></td><td></td><td></td><td></td></tr>`;
     const txs = parseTransactions(ssnbTable(rows), REAL_ACCOUNTS, new Date(2026, 9, 9));
+    expect(txs[0]).toMatchObject({ category: null, subCategory: null });
+    expect(txs[1]).toMatchObject({ category: null, subCategory: null });
+  });
+
+  it("大項目・中項目の列自体が無いテーブルでは推定にフォールバックする", () => {
+    // 列が無いページ（旧レイアウト）だけが推定対象。列があるページでは推定しない
+    const noCategoryCols = `
+    <table class="table table-hover">
+      <thead><tr><th>日付</th><th>内容</th><th>金額（円）</th><th>保有金融機関</th></tr></thead>
+      <tbody>
+        <tr><td>10/02(金)</td><td>静岡県沼津市 ラクテンイチバ702520</td><td>-1,000</td><td>楽天カード</td></tr>
+        <tr><td>10/03(土)</td><td>謎の入金</td><td>1</td><td>楽天カード</td></tr>
+      </tbody>
+    </table>`;
+    const txs = parseTransactions(noCategoryCols, REAL_ACCOUNTS, new Date(2026, 9, 9));
     expect(txs[0]).toMatchObject({ category: "食費", subCategory: "食料品" });
     expect(txs[1]).toMatchObject({ category: null, subCategory: null });
   });

@@ -761,14 +761,12 @@ export function parseTransactions(
     const isTransfer = /\(振替\)/.test(amountText);
     const amount = parseYenLoose(amountText.replace(/\(振替\)/g, ""));
     if (amount === null) continue;
-    const major = cellText(tds[majorIdx]);
-    const minor = cellText(tds[minorIdx]);
-    // 大項目・中項目が無い行は内容ベース推定（本家 seed カテゴリ体系）で補完する。
-    // 判定不能は null（web 側の未分類/その他扱い）。
-    const estimated = categorizeTransaction(description);
+    // SSNB の大項目/中項目列がある場合はその値のみを正とする（空セル＝未分類で推定しない）。
+    // 列が無いページのみ内容ベース推定にフォールバックする。
+    const estimated = majorIdx >= 0 || minorIdx >= 0 ? null : categorizeTransaction(description);
     // 中項目は category に連結せず subCategory へ入れる（本家の category / sub_category 分離に合わせる）
-    const category = major || estimated?.category || null;
-    const subCategory = minor || estimated?.subCategory || null;
+    const category = (majorIdx >= 0 ? cellText(tds[majorIdx]) : estimated?.category) || null;
+    const subCategory = (minorIdx >= 0 ? cellText(tds[minorIdx]) : estimated?.subCategory) || null;
     const contentKey = `${date}\u0000${description}\u0000${amount}`;
     const occurrence = occurrenceByContent.get(contentKey) ?? 0;
     occurrenceByContent.set(contentKey, occurrence + 1);
