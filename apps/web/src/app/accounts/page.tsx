@@ -1,9 +1,9 @@
 import { countUnresolvedCards, getAccountAlerts, getAccountsGroupedByCategory, getDb, getWithdrawalAccountState, getWithdrawalAlertDays } from "@asset-scraping/db";
-import { CreditCard } from "lucide-react";
+import { CreditCard, Wallet } from "lucide-react";
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
 import { Badge } from "../../components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { listUnresolvedWithdrawals, listWithdrawalShortages } from "../../lib/account-alerts";
 import { AccountListClient } from "./account-list.client";
 
@@ -41,6 +41,8 @@ export default async function AccountsPage() {
   const unresolvedAlerts = listUnresolvedWithdrawals(withdrawalAlerts);
   const shortageRows = listWithdrawalShortages(withdrawalAlerts);
   const alertDays = getWithdrawalAlertDays(db);
+  // 固定費の残高不足（scheduled_withdrawal とは別枠。listWithdrawalShortages は scheduled_withdrawal だけを見るため重複しない）
+  const paymentAlerts = alerts.filter((a) => a.kind === "scheduled_payment");
 
   return (
     <PageLayout
@@ -123,6 +125,37 @@ export default async function AccountsPage() {
                 : "銀行系の口座が見つからないため、引き落とし残高の比較ができません。"}
               設定タブで「引き落とし口座（既定）」またはカード別の引き落とし口座を選ぶと警告を出します。
               引き落とし口座を特定できないカードが {unresolvedCardCount} 件あります。
+            </p>
+          </CardContent>
+        </Card>
+      )}
+      {paymentAlerts.length > 0 && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle icon={Wallet}>固定費の引き落としで残高不足</CardTitle>
+            <CardDescription>登録した固定費とカード引き落としを合算して判定しています</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2">
+              {paymentAlerts.map((alert) => (
+                <li
+                  key={`${alert.accountId}-${alert.paymentName ?? ""}-${alert.scheduledWithdrawalDate}`}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+                >
+                  <Badge variant="warning">残高不足</Badge>
+                  <span className="font-semibold text-foreground">{alert.paymentName}</span>
+                  <span>{alert.withdrawalAccountName ?? "口座不明"}</span>
+                  <span>{(alert.scheduledWithdrawalAmount ?? 0).toLocaleString("ja-JP")}円</span>
+                  <span>{alert.scheduledWithdrawalDate}</span>
+                  <span className="text-destructive">
+                    不足 {(alert.shortage ?? 0).toLocaleString("ja-JP")}円
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-muted-foreground">
+              不足額は引き落とし口座単位の合算値です（同じ口座を共有する固定費・カードの予定を、直近 {alertDays} 日以内の窓で合算）。
+              設定タブで固定費を登録・編集できます。
             </p>
           </CardContent>
         </Card>

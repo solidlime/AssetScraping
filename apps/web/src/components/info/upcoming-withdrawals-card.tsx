@@ -3,7 +3,7 @@ import { CreditCard } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 
-/** F7 フォローアップ: 引き落とし間近のクレカ予定（不足していなくても見せる） */
+/** F7 フォローアップ: 引き落とし間近のクレカ・固定費の予定（不足していなくても見せる） */
 export function UpcomingWithdrawalsCard() {
   const db = getDb();
   const upcoming = getUpcomingWithdrawals(db);
@@ -14,7 +14,7 @@ export function UpcomingWithdrawalsCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle icon={CreditCard}>引き落とし間近のクレカ</CardTitle>
+        <CardTitle icon={CreditCard}>引き落とし間近の予定</CardTitle>
       </CardHeader>
       <CardContent>
         <ul className="space-y-2">
@@ -24,7 +24,8 @@ export function UpcomingWithdrawalsCard() {
               className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
             >
               <span className="text-muted-foreground">{item.date}</span>
-              <span className="font-semibold text-foreground">{item.accountName}</span>
+              <span className="font-semibold text-foreground">{item.paymentName ?? item.accountName}</span>
+              {item.kind === "payment" && <Badge variant="secondary">固定費</Badge>}
               <span>{item.amount.toLocaleString("ja-JP")}円</span>
               {item.withdrawalAccountName && <span>引き落とし元 {item.withdrawalAccountName}</span>}
               <span className="text-xs text-muted-foreground">

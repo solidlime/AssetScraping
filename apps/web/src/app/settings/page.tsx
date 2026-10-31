@@ -2,6 +2,7 @@ import { getAccountsGroupedByCategory, isBankLikeAccount } from "@asset-scraping
 import type { Metadata } from "next";
 import { PageLayout } from "../../components/layout/page-layout";
 import { RefreshButton } from "../../components/RefreshButton";
+import { FixedCostsSection } from "../../components/settings/fixed-costs-section.client";
 import { OtpForm } from "../../components/settings/otp-form.client";
 import { SettingsForm } from "../../components/settings/settings-form.client";
 import { Card, CardContent } from "../../components/ui/card";
@@ -31,6 +32,11 @@ export default async function SettingsPage() {
         <Card>
           <CardContent className="pt-6">
             <SettingsForm withdrawalAccounts={withdrawalAccounts} cards={cards} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <FixedCostsSection withdrawalAccounts={withdrawalAccounts} />
           </CardContent>
         </Card>
         <p className="text-xs text-muted-foreground">

@@ -416,3 +416,26 @@ export const fxRates = sqliteTable("fx_rates", {
   rate: real("rate").notNull(),
   fetchedAt: text("fetched_at").notNull(),
 });
+
+/**
+ * 口座引き落とし（固定費）。家賃・電気代など、カード以外で口座から落ちる定額の支払い。
+ * ssnb からは取得できないため**手動登録専用**。crawler はこのテーブルに触らない。
+ * withdrawalDay は「毎月その日」を表す日番号 (1-31)。その月に無い日は月末に丸める。
+ */
+export const scheduledPayments = sqliteTable("scheduled_payments", {
+  id: text("id").primaryKey(),
+  /** 表示名（家賃 / 電気代 / NHK など自由記述） */
+  name: text("name").notNull(),
+  /** 引き落とし額（円・正値） */
+  amount: integer("amount").notNull(),
+  /** 引き落とし日 (1-31) */
+  withdrawalDay: integer("withdrawal_day").notNull(),
+  /** 引き落とし元口座。口座が消えたら固定費も消す */
+  withdrawalAccountId: text("withdrawal_account_id")
+    .notNull()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  /** false で警告対象から除外（休止中・解約済みの保持用） */
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

@@ -44,6 +44,7 @@ export {
 export * from "./repositories/categories.ts";
 export * from "./repositories/alerts.ts";
 export * from "./repositories/settings.ts";
+export * from "./repositories/scheduled-payments.ts";
 export * from "./repositories/groups.ts";
 export * from "./repositories/holdings.ts";
 export * from "./repositories/institution-categories.ts";

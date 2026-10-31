@@ -3,6 +3,7 @@
  * - POST /update   → runScrape を実行し、結果サマリを JSON で返す（同時実行は排他）
  * - GET  /settings → 設定取得（定期更新時刻 / 残高しきい値 / 認証情報。パスワードは返さない）
  * - PUT  /settings → 設定更新
+ * - GET/POST/PUT/DELETE /fixed-costs → 固定費（家賃・電気代等）の CRUD。手動登録専用
  * - GET  /health   → 稼働状態
  * web ダッシュボードの設定タブ・手動更新ボタンから /api/* を経由して呼ばれる。
  * 定期更新は Docker crontab の代わりにこのプロセス内 setInterval ループで実施。
@@ -21,6 +22,9 @@ import {
   getWithdrawalAccountId,
   getWithdrawalAlertDays,
   isBankLikeAccount,
+  createScheduledPayment,
+  deleteScheduledPayment,
+  listScheduledPayments,
   resolveDbPath,
   resolveCrawlerCredential,
   setCrawlerCredential,
@@ -28,8 +32,10 @@ import {
   setScheduledRefreshTime,
   setWithdrawalAccountId,
   setWithdrawalAlertDays,
+  updateScheduledPayment,
   validateLowBalanceThreshold,
   validateScheduleTime,
+  validateScheduledPayment,
   validateWithdrawalAlertDays,
   type Database,
 } from "@asset-scraping/db";
@@ -294,6 +300,44 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+/**
+ * /fixed-costs の検証・保存。HTTP 層とテストの両方から呼ぶ（handleDividendMapping と同じ形）。
+ * GET = 一覧 / POST = 201 作成 / PUT = 更新 / DELETE = 削除。検証エラー 400、不明 id 404。
+ * 書込前に必ず validateScheduledPayment を通す（カード別リンクと同じ「検証→書込」分離）。
+ */
+export function handleFixedCosts(db: Database, method: string, body: unknown): { status: number; body: unknown } {
+  if (method === "GET") return { status: 200, body: { ok: true, payments: listScheduledPayments(db) } };
+
+  const raw = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+  try {
+    if (method === "DELETE") {
+      const id = raw.id;
+      if (typeof id !== "string" || id.length === 0) throw new Error("id を指定してください");
+      if (!deleteScheduledPayment(db, id)) {
+        return { status: 404, body: { ok: false, error: `固定費が見つかりません: ${id}` } };
+      }
+      return { status: 200, body: { ok: true } };
+    }
+
+    const input = validateScheduledPayment(db, raw);
+    if (method === "POST") {
+      return { status: 201, body: { ok: true, payment: createScheduledPayment(db, input) } };
+    }
+    if (method === "PUT") {
+      const id = raw.id;
+      if (typeof id !== "string" || id.length === 0) throw new Error("id を指定してください");
+      // 未知 id は updateScheduledPayment の throw と区別できないため、書く前に存在確認する
+      if (!listScheduledPayments(db).some((payment) => payment.id === id)) {
+        return { status: 404, body: { ok: false, error: `固定費が見つかりません: ${id}` } };
+      }
+      return { status: 200, body: { ok: true, payment: updateScheduledPayment(db, id, input) } };
+    }
+    return { status: 405, body: { ok: false, error: "method not allowed" } };
+  } catch (err) {
+    return { status: 400, body: { ok: false, error: err instanceof Error ? err.message : String(err) } };
+  }
+}
+
 export async function handleSettingsPut(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const body = await readJsonBody(req);
@@ -369,6 +413,18 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
   if (req.method === "PUT" && url === "/settings") {
     await handleSettingsPut(req, res);
+    return;
+  }
+  if (url === "/fixed-costs" && (req.method === "GET" || req.method === "POST" || req.method === "PUT" || req.method === "DELETE")) {
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid JSON body" });
+      return;
+    }
+    const outcome = handleFixedCosts(getDb(), req.method, body);
+    sendJson(res, outcome.status, outcome.body);
     return;
   }
   if (req.method === "POST" && url === "/dividends/sync") {

@@ -57,6 +57,13 @@
       "when": 1792838861908,
       "tag": "0007_overjoyed_bloodstorm",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793417760931,
+      "tag": "0008_premium_warbird",
+      "breakpoints": true
     }
   ]
 }

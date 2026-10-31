@@ -627,3 +627,159 @@ describe("getUpcomingWithdrawals", () => {
     expect(upcoming?.withdrawalAccountId).toBeUndefined();
   });
 });
+
+/** 固定費（scheduled_payments）を投入 */
+function seedFixedCost(
+  id: string,
+  name: string,
+  amount: number,
+  withdrawalDay: number,
+  withdrawalAccountId: string,
+  isActive = true,
+): void {
+  const ts = new Date().toISOString();
+  db.insert(schema.scheduledPayments)
+    .values({ id, name, amount, withdrawalDay, withdrawalAccountId, isActive, createdAt: ts, updatedAt: ts })
+    .run();
+}
+
+// 固定日付で判定する（引き落とし日の月末丸め・翌月繰り越しを検証するため today を固定）
+const TODAY = "2026-10-25";
+const paymentAlerts = (today = TODAY, alertDays?: number) =>
+  getAccountAlerts(db, { threshold: -1, today, ...(alertDays === undefined ? {} : { withdrawalAlertDays: alertDays }) }).filter(
+    (a) => a.kind === "scheduled_payment",
+  );
+
+describe("getAccountAlerts / scheduled_payment", () => {
+  beforeEach(() => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000, "ok", seedBankCategory());
+  });
+
+  it("窓内の固定費が残高を超えると scheduled_payment 警告になる", () => {
+    seedFixedCost("rent", "家賃", 50_000, 27, "bank-1");
+    expect(paymentAlerts()).toEqual([
+      {
+        kind: "scheduled_payment",
+        accountId: "bank-1",
+        accountName: "青空銀行",
+        institution: "青空銀行",
+        balance: 10_000,
+        status: "ok",
+        scheduledWithdrawalAmount: 50_000,
+        scheduledWithdrawalDate: "2026-10-27",
+        paymentName: "家賃",
+        shortage: 40_000,
+        withdrawalAccountName: "青空銀行",
+        withdrawalAccountId: "bank-1",
+      },
+    ]);
+  });
+
+  it("残高が足りていれば返らない", () => {
+    seedAccount("bank-rich", "ゆうちょ銀行", "ゆうちょ銀行", 100_000);
+    seedFixedCost("rent", "家賃", 50_000, 27, "bank-rich");
+    expect(paymentAlerts()).toHaveLength(0);
+  });
+
+  it("窓外（alertDays 超過）の固定費は返らない", () => {
+    seedFixedCost("rent", "家賃", 50_000, 27, "bank-1");
+    expect(paymentAlerts(TODAY, 1)).toHaveLength(0);
+  });
+
+  it("isActive=false の固定費は対象外", () => {
+    seedFixedCost("rent", "家賃", 50_000, 27, "bank-1", false);
+    expect(paymentAlerts()).toHaveLength(0);
+  });
+
+  it("引き落とし元口座のステータス行が無ければ判定しない（不足額を捏造しない）", () => {
+    seedAccountWithoutStatus("ghost-bank", "残高不明銀行");
+    seedFixedCost("rent", "家賃", 50_000, 27, "ghost-bank");
+    expect(paymentAlerts()).toHaveLength(0);
+  });
+
+  it("同じ口座のカード予定と合算して不足判定する（片方だけなら足りる）", () => {
+    seedAccount("bank-shared", "みずほ銀行", "みずほ銀行", 60_000);
+    seedCard("card-1", "三井住友カード", { amount: 50_000, date: "2026-10-27", withdrawalAccountId: "bank-shared" });
+    // カード単独 50,000 <= 60,000 なので警告なし
+    expect(getAccountAlerts(db, { threshold: -1, today: TODAY })).toHaveLength(0);
+
+    seedFixedCost("dentaku", "電気代", 30_000, 27, "bank-shared");
+    const alerts = getAccountAlerts(db, { threshold: -1, today: TODAY });
+    // 合算 80,000 - 60,000 = 20,000。固定費側の警告に口座単位の不足額が載る
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      kind: "scheduled_payment",
+      paymentName: "電気代",
+      scheduledWithdrawalAmount: 30_000,
+      shortage: 20_000,
+      balance: 60_000,
+    });
+  });
+
+  it("カード引き落としと同じ枠で期日昇順に並ぶ", () => {
+    seedAccount("bank-0", "残高ゼロ銀行", "残高ゼロ銀行", 0);
+    seedCard("card-1", "カード", { amount: 10_000, date: "2026-10-29", withdrawalAccountId: "bank-0" });
+    seedFixedCost("rent", "家賃", 50_000, 26, "bank-0");
+    const dated = getAccountAlerts(db, { threshold: -1, today: TODAY }).filter(
+      (a) => a.kind === "scheduled_payment" || a.kind === "scheduled_withdrawal",
+    );
+    expect(dated.map((a) => a.scheduledWithdrawalDate)).toEqual(["2026-10-26", "2026-10-29"]);
+  });
+
+  it("31日指定はその月に無ければ月末に丸める（2月）", () => {
+    seedFixedCost("rent", "家賃", 50_000, 31, "bank-1");
+    expect(paymentAlerts("2026-02-25")[0]?.scheduledWithdrawalDate).toBe("2026-02-28");
+  });
+
+  it("月末当日は当月扱い / うるう年の 2/29 も正しく返す", () => {
+    seedFixedCost("rent", "家賃", 50_000, 31, "bank-1");
+    expect(paymentAlerts("2026-02-28")[0]?.scheduledWithdrawalDate).toBe("2026-02-28");
+    seedFixedCost("rent-2", "家賃（うるう年）", 50_000, 29, "bank-1");
+    expect(paymentAlerts("2028-02-25").map((a) => a.scheduledWithdrawalDate)).toEqual([
+      "2028-02-29",
+      "2028-02-29",
+    ]);
+  });
+
+  it("引き落とし日を過ぎていれば翌月に繰り越す", () => {
+    seedFixedCost("rent", "家賃", 50_000, 15, "bank-1");
+    // 翌月 11/15 は 21 日後: 既定 7 日窓では出ない
+    expect(paymentAlerts()).toHaveLength(0);
+    expect(paymentAlerts(TODAY, 21)[0]?.scheduledWithdrawalDate).toBe("2026-11-15");
+  });
+
+  it("当日の引き落としは窓に含める", () => {
+    seedFixedCost("rent", "家賃", 50_000, 25, "bank-1");
+    const [alert] = paymentAlerts();
+    expect(alert?.scheduledWithdrawalDate).toBe("2026-10-25");
+  });
+});
+
+describe("getUpcomingWithdrawals / 固定費", () => {
+  it("固定費も kind=\"payment\" で返す（不足していなくても）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedFixedCost("rent", "家賃", 50_000, 27, "bank-1");
+    expect(getUpcomingWithdrawals(db, { today: TODAY })).toEqual([
+      {
+        kind: "payment",
+        accountId: "rent",
+        accountName: "家賃",
+        paymentName: "家賃",
+        institution: "青空銀行",
+        amount: 50_000,
+        date: "2026-10-27",
+        remainingDays: 2,
+        withdrawalAccountName: "青空銀行",
+        withdrawalAccountId: "bank-1",
+        balance: 200_000,
+      },
+    ]);
+  });
+
+  it("カード予定と固定費は期日昇順で混ざる", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-1", "カード", { amount: 30_000, date: "2026-10-29", withdrawalAccountId: "bank-1" });
+    seedFixedCost("rent", "家賃", 50_000, 26, "bank-1");
+    expect(getUpcomingWithdrawals(db, { today: TODAY }).map((u) => u.date)).toEqual(["2026-10-26", "2026-10-29"]);
+  });
+});

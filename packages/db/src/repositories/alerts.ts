@@ -9,6 +9,7 @@ import {
   getWithdrawalAccountId,
   getWithdrawalAlertDays,
 } from "./settings.ts";
+import { listScheduledPayments, type ScheduledPayment } from "./scheduled-payments.ts";
 
 /**
  * 口座警告（本家 bean・account-notifications-data.ts の相当物）。
@@ -16,7 +17,7 @@ import {
  * 口座一覧の現在残高が根拠のため **現在残高 <= しきい値** で判定する。
  * 加えてエラー系ステータス（error / updating / suspended）の口座を返す。
  */
-export type AccountAlertKind = "low_balance" | "account_status" | "scheduled_withdrawal";
+export type AccountAlertKind = "low_balance" | "account_status" | "scheduled_withdrawal" | "scheduled_payment";
 
 export interface AccountAlert {
   kind: AccountAlertKind;
@@ -26,18 +27,21 @@ export interface AccountAlert {
   /** scheduled_withdrawal のみ: 判定に使った引き落とし口座の残高 */
   balance: number;
   status: AccountStatusType;
-  /** scheduled_withdrawal のみ: 引き落とし予定額（正値） */
+  /** scheduled_withdrawal / scheduled_payment のみ: 引き落とし予定額（正値） */
   scheduledWithdrawalAmount?: number;
-  /** scheduled_withdrawal のみ: 引き落とし予定日 (YYYY-MM-DD) */
+  /** scheduled_withdrawal / scheduled_payment のみ: 引き落とし予定日 (YYYY-MM-DD) */
   scheduledWithdrawalDate?: string;
+  /** scheduled_payment のみ: 固定費の名称 */
+  paymentName?: string;
   /**
-   * scheduled_withdrawal のみ: 不足額 **（口座単位）**。
+   * scheduled_withdrawal / scheduled_payment のみ: 不足額 **（口座単位）**。
+   * 判定はカード予定と固定費の合算額で行うので、同じ口座を共有する警告には同じ値が載る。
    * 同一口座を共有する複数カードには同じ値が載るので、UI 側でカード単位に合算すると倍になる。
    */
   shortage?: number;
-  /** scheduled_withdrawal のみ: 判定に使った引き落とし口座の名称 */
+  /** scheduled_withdrawal / scheduled_payment のみ: 判定に使った引き落とし口座の名称 */
   withdrawalAccountName?: string;
-  /** scheduled_withdrawal のみ: 解決先の引き落とし口座 ID（解決不能なら未設定） */
+  /** scheduled_withdrawal / scheduled_payment のみ: 解決先の引き落とし口座 ID（解決不能なら未設定） */
   withdrawalAccountId?: string;
   /** scheduled_withdrawal のみ: 設定未投入など注意書き */
   note?: string;
@@ -253,6 +257,88 @@ function buildScheduledWithdrawalAlerts(
   return alerts;
 }
 
+/** その月の日数（月末丸め用）。month は 1-12 */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
+ * withdrawalDay(1-31) から today 以降で最も近い引き落とし日を返す。
+ * その月に無い日（31日等）は月末に丸める。today と同じ日は当月扱い。
+ * 例: (27, "2026-10-25") → "2026-10-27" / (15, "2026-10-25") → "2026-11-15"
+ */
+function nextWithdrawalDate(day: number, today: string): string {
+  const [year, month] = today.split("-").map(Number) as [number, number];
+  const ymd = (y: number, m: number) =>
+    `${y}-${String(m).padStart(2, "0")}-${String(Math.min(day, daysInMonth(y, m))).padStart(2, "0")}`;
+  const thisMonth = ymd(year, month);
+  if (thisMonth >= today) return thisMonth;
+  return month === 12 ? ymd(year + 1, 1) : ymd(year, month + 1);
+}
+
+/**
+ * 窓内（today から alertDays 日以内）の固定費と、口座単位の合算額。
+ * 合算額は**カード引き落とし予定の合算に固定費を足したもの** — 同じ口座からカードと固定費が
+ * 落ちる場合に残高を2回使ってはいけないため。カード側の窓内合算は resolveWithdrawalWindow と共有する。
+ */
+function resolveScheduledPaymentWindow(
+  rows: AlertRow[],
+  payments: ScheduledPayment[],
+  opts: { alertDays: number; withdrawalAccountId: string | null; today: string },
+): { inWindow: { payment: ScheduledPayment; date: string }[]; totals: Map<string, number> } {
+  const inWindow = payments
+    .filter((payment) => payment.isActive)
+    .map((payment) => ({ payment, date: nextWithdrawalDate(payment.withdrawalDay, opts.today) }))
+    .filter(({ date }) => {
+      const remaining = daysUntil(opts.today, date);
+      return remaining >= 0 && remaining <= opts.alertDays;
+    });
+
+  const totals = new Map(resolveWithdrawalWindow(rows, opts)?.totals ?? []);
+  for (const { payment } of inWindow) {
+    const key = payment.withdrawalAccountId;
+    totals.set(key, (totals.get(key) ?? 0) + payment.amount);
+  }
+  return { inWindow, totals };
+}
+
+/**
+ * 固定費の残高不足警告。口座単位の合算額が残高を超える場合のみ、窓内の固定費1件ごとに1警告を出す。
+ * 引き落とし元口座の行が無い（残高不明）場合は判定せずスキップする（不足額を捏造しない）。
+ */
+function buildScheduledPaymentAlerts(
+  rows: AlertRow[],
+  payments: ScheduledPayment[],
+  opts: { alertDays: number; withdrawalAccountId: string | null; today: string },
+): AccountAlert[] {
+  const { inWindow, totals } = resolveScheduledPaymentWindow(rows, payments, opts);
+
+  const alerts: AccountAlert[] = [];
+  for (const { payment, date } of inWindow) {
+    const row = rows.find((r) => r.accountId === payment.withdrawalAccountId);
+    if (!row) continue;
+    const total = totals.get(payment.withdrawalAccountId) ?? 0;
+    if (total <= row.balance) continue;
+    alerts.push({
+      kind: "scheduled_payment",
+      // 警告は引き落とし元口座に出す（固定費自体は口座ではないため）
+      accountId: row.accountId,
+      accountName: row.accountName,
+      institution: row.institution,
+      balance: row.balance,
+      status: toAccountStatusType(row.status),
+      scheduledWithdrawalAmount: payment.amount,
+      scheduledWithdrawalDate: date,
+      paymentName: payment.name,
+      // 口座単位の不足額（同じ口座を共有する警告には同じ値が載る。UI 側で dedupe する前提）
+      shortage: total - row.balance,
+      withdrawalAccountName: row.accountName || undefined,
+      withdrawalAccountId: row.accountId,
+    });
+  }
+  return alerts;
+}
+
 /** ダッシュボード表示用: 窓内の引き落とし予定1件 */
 export interface UpcomingWithdrawal {
   accountId: string;
@@ -269,29 +355,33 @@ export interface UpcomingWithdrawal {
   balance?: number;
   /** 解決できた場合のみ: 口座単位の合算不足額（不足が無ければ undefined） */
   shortage?: number;
+  /** "card" = クレカの引き落とし予定 / "payment" = 固定費（既定は "card"） */
+  kind?: "card" | "payment";
+  /** 固定費のみ: 固定費の名称 */
+  paymentName?: string;
   note?: string;
 }
 
 /**
- * 窓内（alertDays 日以内）の引き落とし予定一覧。**不足していなくても返す**。
+ * 窓内（alertDays 日以内）の引き落とし予定一覧（クレカ + 固定費）。**不足していなくても返す**。
  * /accounts の警告（不足時のみ）とは別に、ダッシュボードで予定を見せる用途。
- * 並び: 期日昇順 → 金額降順 → accountId 昇順。
+ * 並び: 期日昇順 → 金額降順 → accountId 昇順（種別では分けない）。
  */
 export function getUpcomingWithdrawals(
   db: Database,
   opts: { withdrawalAlertDays?: number; withdrawalAccountId?: string | null; today?: string } = {},
 ): UpcomingWithdrawal[] {
   const today = opts.today ?? todayJst();
-  const window = resolveWithdrawalWindow(loadAlertRows(db), {
+  const alertOpts = {
     alertDays: clampWithdrawalAlertDays(opts.withdrawalAlertDays ?? getWithdrawalAlertDays(db)),
     withdrawalAccountId:
       opts.withdrawalAccountId !== undefined ? opts.withdrawalAccountId : getWithdrawalAccountId(db),
     today,
-  });
-  if (window === null) return [];
-  const { resolved, totals } = window;
+  };
+  const rows = loadAlertRows(db);
+  const window = resolveWithdrawalWindow(rows, alertOpts);
 
-  const upcoming = resolved.map(({ row, source, note }): UpcomingWithdrawal => {
+  const cardUpcoming = (window?.resolved ?? []).map(({ row, source, note }): UpcomingWithdrawal => {
     const date = row.scheduledWithdrawalDate as string;
     const base = {
       accountId: row.accountId,
@@ -302,7 +392,7 @@ export function getUpcomingWithdrawals(
       remainingDays: daysUntil(today, date),
     };
     if (!source) return { ...base, ...(note !== undefined ? { note } : {}) };
-    const total = totals.get(source.accountId) ?? 0;
+    const total = window?.totals.get(source.accountId) ?? 0;
     return {
       ...base,
       withdrawalAccountName: source.accountName || undefined,
@@ -313,7 +403,32 @@ export function getUpcomingWithdrawals(
     };
   });
 
-  return upcoming.sort((x, y) => {
+  // 固定費は口座ではないので accountId には固定費自身の ID を入れ、表示名は paymentName で渡す
+  const { inWindow: paymentsInWindow, totals: paymentTotals } = resolveScheduledPaymentWindow(
+    rows,
+    listScheduledPayments(db, { activeOnly: true }),
+    alertOpts,
+  );
+  const paymentUpcoming = paymentsInWindow.map(({ payment, date }): UpcomingWithdrawal => {
+    const source = rows.find((r) => r.accountId === payment.withdrawalAccountId);
+    const total = paymentTotals.get(payment.withdrawalAccountId) ?? 0;
+    return {
+      kind: "payment",
+      accountId: payment.id,
+      accountName: payment.name,
+      paymentName: payment.name,
+      institution: source?.institution ?? "",
+      amount: payment.amount,
+      date,
+      remainingDays: daysUntil(today, date),
+      withdrawalAccountName: source?.accountName || undefined,
+      withdrawalAccountId: payment.withdrawalAccountId,
+      ...(source ? { balance: source.balance } : {}),
+      ...(source && total > source.balance ? { shortage: total - source.balance } : {}),
+    };
+  });
+
+  return [...cardUpcoming, ...paymentUpcoming].sort((x, y) => {
     if (x.date !== y.date) return x.date < y.date ? -1 : 1;
     if (x.amount !== y.amount) return y.amount - x.amount;
     return x.accountId < y.accountId ? -1 : x.accountId > y.accountId ? 1 : 0;
@@ -376,7 +491,8 @@ export function getWithdrawalAccountState(
 
 /**
  * 警告リスト取得。threshold を省略すると DB 設定（低残高しきい値、既定 100_000）から読む。
- * ソート: low_balance 残高昇順（同一残高は accountId順） → account_status → scheduled_withdrawal 期日昇順。
+ * ソート: low_balance 残高昇順（同一残高は accountId順） → account_status →
+ *       scheduled_withdrawal / scheduled_payment（同じ枠で期日昇順）。
  * 両方該当の口座は low_balance に統一する（重複返しはしない）。
  */
 export function getAccountAlerts(
@@ -414,21 +530,26 @@ export function getAccountAlerts(
   const lowIds = new Set(lowBalanceAlerts.map((a) => a.accountId));
   const merged = [...lowBalanceAlerts, ...statusAlerts.filter((a) => !lowIds.has(a.accountId))];
 
-  const withdrawalAlerts = buildScheduledWithdrawalAlerts(rows, {
+  const withdrawalOpts = {
     // opts 経路も DB 経路と同じ 1 本のクランプを通す（0/負/NaN で警告ゼロが無言成立するのを防ぐ）
     alertDays: clampWithdrawalAlertDays(opts.withdrawalAlertDays ?? getWithdrawalAlertDays(db)),
     withdrawalAccountId:
       opts.withdrawalAccountId !== undefined ? opts.withdrawalAccountId : getWithdrawalAccountId(db),
     today: opts.today ?? todayJst(),
-  });
+  };
+  const withdrawalAlerts = buildScheduledWithdrawalAlerts(rows, withdrawalOpts);
+  // 固定費はカード予定と同じ口座で合算してから不足判定する（残高を2回使わない）
+  const paymentAlerts = buildScheduledPaymentAlerts(rows, listScheduledPayments(db), withdrawalOpts);
 
-  return [...merged, ...withdrawalAlerts]
+  return [...merged, ...withdrawalAlerts, ...paymentAlerts]
     .sort((x, y) => {
       const rank = (a: AccountAlert) =>
         a.kind === "low_balance" ? 0 : a.kind === "account_status" ? 1 : 2;
       const kindDiff = rank(x) - rank(y);
       if (kindDiff !== 0) return kindDiff;
-      if (x.kind === "scheduled_withdrawal" && y.kind === "scheduled_withdrawal") {
+      // カード引き落としと固定費は同じ枠に混ぜて期日昇順
+      const dated = (a: AccountAlert) => a.kind === "scheduled_withdrawal" || a.kind === "scheduled_payment";
+      if (dated(x) && dated(y)) {
         const xd = x.scheduledWithdrawalDate ?? "";
         const yd = y.scheduledWithdrawalDate ?? "";
         if (xd !== yd) return xd < yd ? -1 : 1;
