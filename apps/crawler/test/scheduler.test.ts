@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { jstDayStartMs, nextOccurrenceJst, parseHhMm } from "../src/scheduler.js";
+import {
+  isRescrapeDue,
+  jstDayStartMs,
+  nextOccurrenceJst,
+  parseHhMm,
+} from "../src/scheduler.js";
 
 describe("parseHhMm", () => {
   it("HH:MM を分解する", () => {
@@ -10,6 +15,26 @@ describe("parseHhMm", () => {
     expect(parseHhMm("24:00")).toBeNull();
     expect(parseHhMm("6:60")).toBeNull();
     expect(parseHhMm("abc")).toBeNull();
+  });
+});
+
+describe("isRescrapeDue", () => {
+  const now = new Date("2026-02-14T12:00:00+09:00");
+
+  it("null（未予約）は false", () => {
+    expect(isRescrapeDue(null, now)).toBe(false);
+  });
+
+  it("未来の予約は false", () => {
+    expect(isRescrapeDue(now.getTime() + 1, now)).toBe(false);
+  });
+
+  it("ちょうど到達で true", () => {
+    expect(isRescrapeDue(now.getTime(), now)).toBe(true);
+  });
+
+  it("過去の予約は true", () => {
+    expect(isRescrapeDue(now.getTime() - 1, now)).toBe(true);
   });
 });
 

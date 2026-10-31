@@ -23,6 +23,8 @@ import {
   upsertMonthlyCashFlow,
   upsertTransactions,
   pruneHoldingsByName,
+  RESCRAPE_DELAY_MS,
+  setRescrapeAt,
   type Database,
 } from "@asset-scraping/db";
 import {
@@ -31,6 +33,7 @@ import {
   type ScrapeRun,
 } from "@asset-scraping/shared";
 import { closeSession, getSession, saveStorageState, type Session } from "./auth.js";
+import { pressBatchRefresh } from "./batchRefresh.js";
 import { FetchPage } from "./fetchPage.js";
 import {
   parseAccounts,
@@ -48,10 +51,11 @@ export interface RunScrapeOptions {
    * SCRAPE_MODE=history 互換のため残置するが、挙動は通常モードと同一。
    */
   history?: boolean;
+  /** スクレイプ後に一括更新を押すか（既定 false）。押した場合 60 分後の再取得を予約する */
+  pressBatchRefresh?: boolean;
 }
 
 export async function runScrape(db: Database, options: RunScrapeOptions = {}): Promise<ScrapeRun> {
-  void options;
   const startedAt = new Date().toISOString();
   const stats: ScrapeRun = {
     startedAt,
@@ -160,6 +164,22 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     regenerateCashFlowPeriods(db);
     linkAllAccountsToDefaultGroup(db);
     assignAccountCategories(db);
+
+    // 6) 一括更新キック。上流の再取得を積んでおき、60分後に rescrape で最新を拾う。
+    //    既存の取得結果には影響させない（押すと各行が「更新中」になるため、必ず全取得の後に行う）。
+    if (options.pressBatchRefresh) {
+      try {
+        const pressed = await pressBatchRefresh(session.page);
+        if (pressed) {
+          setRescrapeAt(db, Date.now() + RESCRAPE_DELAY_MS);
+          console.log("[crawler] batch refresh pressed (rescrape scheduled in 60min)");
+        } else {
+          console.warn("[crawler] batch refresh link not found");
+        }
+      } catch (err) {
+        console.warn("[crawler] batch refresh failed:", err instanceof Error ? err.message : err);
+      }
+    }
 
     // storageState を更新（セッション延命）
     if (session.didFullLogin) {

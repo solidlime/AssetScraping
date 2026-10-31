@@ -42,3 +42,8 @@ export function nextOccurrenceJst(now: Date, hhmm: string): number {
   if (target > now.getTime()) return target;
   return target + DAY_MS;
 }
+
+/** 一括更新後の再取得時刻に到達したか。null（未予約）は常に false */
+export function isRescrapeDue(rescrapeAt: number | null, now: Date): boolean {
+  return rescrapeAt !== null && now.getTime() >= rescrapeAt;
+}

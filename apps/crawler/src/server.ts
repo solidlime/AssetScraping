@@ -15,9 +15,11 @@ import { eq } from "drizzle-orm";
 import {
   accountStatuses,
   accounts,
+  clearRescrapeAt,
   createDb,
   getCrawlerCredential,
   getLowBalanceThreshold,
+  getRescrapeAt,
   getScheduledRefreshTime,
   getWithdrawalAccountId,
   getWithdrawalAlertDays,
@@ -42,7 +44,7 @@ import {
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
 import { getOtpStatus, submitOtpCode } from "./otp.js";
 import { TwoFactorRequiredError } from "./auth.js";
-import { nextOccurrenceJst } from "./scheduler.js";
+import { isRescrapeDue, nextOccurrenceJst } from "./scheduler.js";
 import { syncDividends, upsertDividendSymbol, validateDividendMapping } from "./dividends.js";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
@@ -93,13 +95,17 @@ interface RunOutcome {
 }
 
 /** runScrape の共通実行体。HTTP とスケジューラの両方から呼ぶ（同時実行は排他） */
-async function execRunScrape(source: string): Promise<RunOutcome> {
+async function execRunScrape(
+  source: string,
+  opts: { pressBatchRefresh?: boolean } = {},
+): Promise<RunOutcome> {
   if (running) return { ok: false, error: "scrape is already running" };
   running = true;
   const startedAt = new Date().toISOString();
   try {
     const options: RunScrapeOptions = {
       history: process.env.SCRAPE_MODE === "history",
+      pressBatchRefresh: opts.pressBatchRefresh === true,
     };
     const stats = await runScrape(getDb(), options);
     lastResult = { startedAt, finishedAt: stats.finishedAt, ok: true, source };
@@ -117,7 +123,7 @@ async function execRunScrape(source: string): Promise<RunOutcome> {
 }
 
 async function handleUpdate(res: ServerResponse): Promise<void> {
-  const outcome = await execRunScrape("manual");
+  const outcome = await execRunScrape("manual", { pressBatchRefresh: true });
   const status = outcome.ok ? 200 : outcome.twoFactor ? 503 : outcome.error === "scrape is already running" ? 409 : 500;
   sendJson(res, status, outcome.ok ? { ok: true, stats: outcome.stats } : { ok: false, error: outcome.error });
 }
@@ -356,8 +362,15 @@ export async function handleSettingsPut(req: IncomingMessage, res: ServerRespons
  */
 export function schedulerTick(now = new Date()): boolean {
   if (running) return false;
+  // 一括更新を押してから 60 分後の再取得。押した回のスクレイプでは押さないので無限ループしない
+  const db = getDb();
+  if (isRescrapeDue(getRescrapeAt(db), now)) {
+    clearRescrapeAt(db);
+    void execRunScrape("rescrape", { pressBatchRefresh: false });
+    return true;
+  }
   // 設定時刻は毎 tick DB から読み直す（UI 変更が即反映される）
-  const targetTime = getScheduledRefreshTime(getDb());
+  const targetTime = getScheduledRefreshTime(db);
   const desired = nextOccurrenceJst(now, targetTime);
   if (nextRunAt === null) {
     nextRunAt = desired;
@@ -365,7 +378,7 @@ export function schedulerTick(now = new Date()): boolean {
   }
   if (now.getTime() >= nextRunAt) {
     nextRunAt = null;
-    void execRunScrape("scheduled");
+    void execRunScrape("scheduled", { pressBatchRefresh: true });
     return true;
   }
   if (desired !== nextRunAt) {
