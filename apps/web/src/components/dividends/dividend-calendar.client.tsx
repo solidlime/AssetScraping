@@ -59,7 +59,7 @@ function CalendarTooltip({ active, payload }: CalendarTooltipProps) {
       <div className="space-y-1">
         <div className="font-semibold">{getShortMonth(point.month)}（{point.month.slice(0, 4)}年）</div>
         <div className="flex items-center justify-between gap-6">
-          <span className="text-muted-foreground">{point.isConfirmed ? "実績" : "推定（見込み）"}</span>
+          <span className="text-muted-foreground">{point.isConfirmed ? "確定（配当落ち）" : "推定（見込み）"}</span>
           <span className="tabular-nums">{formatCurrency(point.confirmed + point.estimated)}</span>
         </div>
       </div>
@@ -87,7 +87,7 @@ export function DividendCalendarChartClient({
                   style={{ backgroundColor: semanticColors.income }}
                   aria-hidden
                 />
-                実績
+                確定
               </span>
               <span className="flex items-center gap-1.5">
                 <span
@@ -133,7 +133,7 @@ export function DividendCalendarChartClient({
                 tickFormatter={(value) => `${Math.round(value / 10000)}万`}
               />
               <Tooltip content={<CalendarTooltip />} />
-              <Bar dataKey="confirmed" name="実績" stackId="a" fill={semanticColors.income} />
+              <Bar dataKey="confirmed" name="確定" stackId="a" fill={semanticColors.income} />
               <Bar
                 dataKey="estimated"
                 name="推定（見込み）"

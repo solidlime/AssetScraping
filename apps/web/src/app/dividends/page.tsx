@@ -57,12 +57,15 @@ export default async function DividendsPage() {
               <AmountDisplay amount={currentMonth.totalJpy} size="2xl" weight="bold" />
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
                 <span>
-                  実績 <AmountDisplay amount={currentMonth.confirmedJpy} size="sm" />
+                  確定（配当落ち） <AmountDisplay amount={currentMonth.confirmedJpy} size="sm" />
                 </span>
                 <span>
-                  推定 <AmountDisplay amount={currentMonth.estimatedJpy} size="sm" />
+                  推定（月末までの見込み） <AmountDisplay amount={currentMonth.estimatedJpy} size="sm" />
                 </span>
               </div>
+              <p className="text-xs text-muted-foreground">
+                ※ 配当落ち日ベースの見込みです。実際の入金は銘柄により数週間〜数ヶ月後になります。
+              </p>
             </CardContent>
           </Card>
 
@@ -119,7 +122,7 @@ export default async function DividendsPage() {
                         <td className="py-2 pr-4 tabular-nums">{formatMonth(m.month)}</td>
                         <td className="py-2 pr-4">
                           <Badge variant={m.confirmed ? "secondary" : "outline"}>
-                            {m.confirmed ? "実績" : "推定"}
+                            {m.confirmed ? "確定" : "推定"}
                           </Badge>
                         </td>
                         <td className="py-2 pr-4 text-right">
@@ -129,6 +132,9 @@ export default async function DividendsPage() {
                     ))}
                   </tbody>
                 </table>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  ※ 配当落ち日ベースの見込みです。実際の入金は銘柄により数週間〜数ヶ月後になります。
+                </p>
               </div>
             )}
           </CardContent>
@@ -153,7 +159,7 @@ export default async function DividendsPage() {
                       <th scope="col" className="py-2 pr-4 text-right font-medium">数量</th>
                       <th scope="col" className="py-2 pr-4 text-right font-medium">評価額</th>
                       <th scope="col" className="py-2 pr-4 text-right font-medium">年間見込み</th>
-                      <th scope="col" className="py-2 pr-4 text-right font-medium">月平均</th>
+                      <th scope="col" className="py-2 pr-4 text-right font-medium">月平均（直近3ヶ月）</th>
                       <th scope="col" className="py-2 pr-4 text-right font-medium">利回り</th>
                       <th scope="col" className="py-2 pr-4 font-medium">解決状態</th>
                     </tr>
@@ -209,6 +215,9 @@ export default async function DividendsPage() {
                     })}
                   </tbody>
                 </table>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  ※ 月平均は直近3ヶ月の実績平均です（年間見込み ÷ 12 ではありません）。
+                </p>
               </div>
             )}
           </CardContent>

@@ -39,7 +39,7 @@ export type DividendForecastRow = {
   perShareTtm: number | null; // 直近12ヶ月の1株あたり配当合計（現地通貨）
   perShareMonthlyAvg: number | null; // 直近3ヶ月の月平均（現地通貨）
   annualAmountJpy: number | null; // 年間見込み（円・整数）
-  monthlyAmountJpy: number | null; // 今月の見込み（円・整数）
+  monthlyAmountJpy: number | null; // 直近3ヶ月平均ベースの月換算見込み（円・整数）
   yieldPct: number | null; // annualAmountJpy / value * 100
   resolved: boolean;
   reason: string | null; // 未解決・除外の理由
