@@ -13,9 +13,9 @@ export async function pressBatchRefresh(page: Page): Promise<boolean> {
   await page.goto(SSNB_URLS.accounts, { waitUntil: "domcontentloaded", timeout: 45_000 });
   const link = page.getByRole("link", { name: LABEL });
   if ((await link.count()) === 0) return false;
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => null),
-    link.first().click(),
-  ]);
+  // クリックしても遷移せず /accounts の各行が「更新中」に変わるだけなので、
+  // ナビゲーション待ちは使わない（毎回タイムアウト分待ってしまう）。リクエスト分の猶予だけ与える。
+  await link.first().click();
+  await page.waitForTimeout(3_000);
   return true;
 }
