@@ -29,8 +29,10 @@ import {
   listScheduledPayments,
   resolveDbPath,
   resolveCrawlerCredential,
+  RESCRAPE_DELAY_MS,
   setCrawlerCredential,
   setLowBalanceThreshold,
+  setRescrapeAt,
   setScheduledRefreshTime,
   setWithdrawalAccountId,
   setWithdrawalAlertDays,
@@ -42,8 +44,9 @@ import {
   type Database,
 } from "@asset-scraping/db";
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
+import { pressBatchRefresh } from "./batchRefresh.js";
 import { getOtpStatus, submitOtpCode } from "./otp.js";
-import { TwoFactorRequiredError } from "./auth.js";
+import { closeSession, getSession, TwoFactorRequiredError } from "./auth.js";
 import { isRescrapeDue, nextOccurrenceJst } from "./scheduler.js";
 import { syncDividends, upsertDividendSymbol, validateDividendMapping } from "./dividends.js";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -97,7 +100,7 @@ interface RunOutcome {
 /** runScrape の共通実行体。HTTP とスケジューラの両方から呼ぶ（同時実行は排他） */
 async function execRunScrape(
   source: string,
-  opts: { pressBatchRefresh?: boolean } = {},
+  opts: { pressBatchRefresh?: boolean; pressBatchRefreshOnly?: boolean } = {},
 ): Promise<RunOutcome> {
   if (running) return { ok: false, error: "scrape is already running" };
   running = true;
@@ -106,6 +109,7 @@ async function execRunScrape(
     const options: RunScrapeOptions = {
       history: process.env.SCRAPE_MODE === "history",
       pressBatchRefresh: opts.pressBatchRefresh === true,
+      pressBatchRefreshOnly: opts.pressBatchRefreshOnly === true,
     };
     const stats = await runScrape(getDb(), options);
     lastResult = { startedAt, finishedAt: stats.finishedAt, ok: true, source };
@@ -117,6 +121,40 @@ async function execRunScrape(
     lastResult = { startedAt, finishedAt: new Date().toISOString(), ok: false, source, error: message };
     console.error(`[crawler] scrape failed (${source}):`, message);
     return { ok: false, error: message, twoFactor };
+  } finally {
+    running = false;
+  }
+}
+
+/**
+ * 定期更新の本体: 一括更新ボタンを押すだけでデータは取得しない。
+ * 押した直後のマネフォ側はまだ各行が「更新中」なので、60 分後の rescrape で取得する。
+ * 取得しないので数秒で終わる。
+ */
+async function execPressBatchRefresh(source: string): Promise<RunOutcome> {
+  if (running) return { ok: false, error: "scrape is already running" };
+  running = true;
+  const startedAt = new Date().toISOString();
+  try {
+    const session = await getSession();
+    try {
+      const pressed = await pressBatchRefresh(session.page);
+      if (pressed) {
+        setRescrapeAt(getDb(), Date.now() + RESCRAPE_DELAY_MS);
+        console.log("[crawler] batch refresh pressed (rescrape scheduled in 60min)");
+      } else {
+        console.warn("[crawler] batch refresh link not found");
+      }
+    } finally {
+      await closeSession(session);
+    }
+    lastResult = { startedAt, finishedAt: new Date().toISOString(), ok: true, source };
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    lastResult = { startedAt, finishedAt: new Date().toISOString(), ok: false, source, error: message };
+    console.error(`[crawler] batch refresh failed (${source}):`, message);
+    return { ok: false, error: message };
   } finally {
     running = false;
   }
@@ -378,7 +416,8 @@ export function schedulerTick(now = new Date()): boolean {
   }
   if (now.getTime() >= nextRunAt) {
     nextRunAt = null;
-    void execRunScrape("scheduled", { pressBatchRefresh: true });
+    // 定期更新は「押すだけ」。データは 60 分後の rescrape で取る（押した直後はまだ「更新中」）。
+    void execPressBatchRefresh("scheduled");
     return true;
   }
   if (desired !== nextRunAt) {

@@ -23,8 +23,6 @@ import {
   upsertMonthlyCashFlow,
   upsertTransactions,
   pruneHoldingsByName,
-  RESCRAPE_DELAY_MS,
-  setRescrapeAt,
   type Database,
 } from "@asset-scraping/db";
 import {
@@ -51,8 +49,18 @@ export interface RunScrapeOptions {
    * SCRAPE_MODE=history 互換のため残置するが、挙動は通常モードと同一。
    */
   history?: boolean;
-  /** スクレイプ後に一括更新を押すか（既定 false）。押した場合 60 分後の再取得を予約する */
+  /**
+   * スクレイプ後に一括更新を押すか（既定 false）。手動更新用。
+   * 定期更新は押すだけで取得しない（pressBatchRefreshOnly）ため、60 分後の再取得予約も
+   * ここでは張らない。予約は押した側（execPressBatchRefresh）が行う。
+   */
   pressBatchRefresh?: boolean;
+  /**
+   * 一括更新を押すだけでデータ取得をせずに終わる（定期更新用）。
+   * 押した直後のマネフォ側はまだ「更新中」なので、60 分後の rescrape で最新を取る。
+   * 予約（rescrape_at）は呼び出し側の execPressBatchRefresh が張る。
+   */
+  pressBatchRefreshOnly?: boolean;
 }
 
 export async function runScrape(db: Database, options: RunScrapeOptions = {}): Promise<ScrapeRun> {
@@ -76,6 +84,17 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
   ensureInstitutionCategories(db);
 
   try {
+    // 定期更新は「押すだけ」。ここで終わり、取得は 60 分後の rescrape が担う。
+    // 前回押した更新の結果を今取っても前日分と同じになるので、先に取得するのは無駄。
+    if (options.pressBatchRefreshOnly) {
+      const pressed = await pressBatchRefresh(session.page);
+      // フルログインまで払ったセッションは保存して翌日も再利用する（毎日フルログインすると
+      // OTP 要求が発生するリスクを避ける）
+      if (session.didFullLogin) await saveStorageState(session);
+      console.log(`[crawler] press-only: batch refresh ${pressed ? "pressed" : "link not found"}`);
+      return stats;
+    }
+
     // 1) 口座一覧・残高（/accounts の構造化テーブル）
     const accountsHtml = await fetcher.fetch(SSNB_URLS.accounts);
     const accounts = parseAccounts(accountsHtml);
@@ -165,17 +184,12 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     linkAllAccountsToDefaultGroup(db);
     assignAccountCategories(db);
 
-    // 6) 一括更新キック。上流の再取得を積んでおき、60分後に rescrape で最新を拾う。
-    //    既存の取得結果には影響させない（押すと各行が「更新中」になるため、必ず全取得の後に行う）。
+    // 6) 一括更新キック（手動更新用）。上流の再取得を積むが、手動は待たずに今の結果を返す。
+    //    押すと各行が「更新中」になるため、取得結果に影響させないよう必ず全取得の後に行う。
     if (options.pressBatchRefresh) {
       try {
         const pressed = await pressBatchRefresh(session.page);
-        if (pressed) {
-          setRescrapeAt(db, Date.now() + RESCRAPE_DELAY_MS);
-          console.log("[crawler] batch refresh pressed (rescrape scheduled in 60min)");
-        } else {
-          console.warn("[crawler] batch refresh link not found");
-        }
+        if (!pressed) console.warn("[crawler] batch refresh link not found");
       } catch (err) {
         console.warn("[crawler] batch refresh failed:", err instanceof Error ? err.message : err);
       }
