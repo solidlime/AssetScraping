@@ -82,6 +82,13 @@ const isCardRow = (row: AlertRow): boolean =>
   row.scheduledWithdrawalAmount !== null || row.category === "card";
 
 /**
+ * low_balance（残高不足警告）の対象外カテゴリ。
+ * card は残高が「利用可能枠/0」、securities は「現金残高」、pension は評価額で、いずれも
+ * 銀行口座の残高不足とは意味が違うため一律しきい値で警告しない。
+ */
+const LOW_BALANCE_EXCLUDED_CATEGORIES: ReadonlySet<string> = new Set(["card", "securities", "pension"]);
+
+/**
  * 銀行系口座（引き落とし口座の候補）かの判定。web（設定画面）と共有する唯一の述語。
  * カードは category="card" で必ず除外する。
  */
@@ -393,7 +400,7 @@ export function getAccountAlerts(
     }));
 
   const lowBalanceAlerts: AccountAlert[] = rows
-    .filter((row) => row.balance <= threshold)
+    .filter((row) => !LOW_BALANCE_EXCLUDED_CATEGORIES.has(row.category) && row.balance <= threshold)
     .map((row) => ({
       kind: "low_balance" as const,
       accountId: row.accountId,

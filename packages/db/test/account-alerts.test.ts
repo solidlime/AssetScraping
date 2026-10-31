@@ -101,6 +101,21 @@ describe("getAccountAlerts", () => {
     ]);
   });
 
+  it("card / securities / pension は残高がしきい値以下でも low_balance にしない", () => {
+    seedAccount("acc-bank", "青空銀行", "青空銀行", 100);
+    seedAccount("acc-card", "カード", "カード", 0);
+    seedAccount("acc-sec", "証券", "証券", 0);
+    seedAccount("acc-pen", "年金", "年金", 0);
+    const categories: Record<string, string> = { "acc-card": "card", "acc-sec": "securities", "acc-pen": "pension" };
+    for (const [id, category] of Object.entries(categories)) {
+      db.update(schema.accounts).set({ category }).where(eq(schema.accounts.id, id)).run();
+    }
+    const ids = getAccountAlerts(db, { threshold: 100_000 })
+      .filter((a: AccountAlert) => a.kind === "low_balance")
+      .map((a: AccountAlert) => a.accountId);
+    expect(ids).toEqual(["acc-bank"]);
+  });
+
   it("しきい値ちょうど・負残高も low_balance（本家 <= 判定踏襲）", () => {
     seedAccount("acc-eq", "ちょうど口座", "銀行", 100_000);
     seedAccount("acc-neg", "マイナス口座", "カード", -5_000);
@@ -366,10 +381,9 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
     seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(3) });
     const alerts = getAccountAlerts(db, { threshold: 100_000 });
     const lowBalanceIds = alerts.filter((a) => a.kind === "low_balance").map((a) => a.accountId);
-    // 既存の low_balance 集合は変わらない（引き落とし警告は別 kind で併存する）
-    expect(lowBalanceIds.sort()).toEqual(["bank-1", "card-1"]);
+    // 引き落とし警告は別 kind で併存する。カードは low_balance の対象外（card は残高不足の概念が違う）
+    expect(lowBalanceIds).toEqual(["bank-1"]);
     expect(alerts.map((a) => a.kind)).toEqual([
-      "low_balance",
       "low_balance",
       "scheduled_withdrawal",
     ]);
