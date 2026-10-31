@@ -1,11 +1,6 @@
-import {
-  getDb,
-  getDividendForecast,
-  schema,
-  type DividendMonthBucket,
-} from "@asset-scraping/db";
+import { getDb, getDividendForecast, schema } from "@asset-scraping/db";
 import { max } from "drizzle-orm";
-import { CalendarDays, Coins, PiggyBank, TableProperties, TrendingUp, Wallet } from "lucide-react";
+import { Coins, PiggyBank, TableProperties, TrendingUp, Wallet } from "lucide-react";
 import type { Metadata } from "next";
 import {
   DividendSyncButton,
@@ -19,7 +14,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { EmptyState } from "../../components/ui/empty-state";
 import { formatDateTime, formatMonth, formatNumber, formatPercent } from "../../lib/format";
 import { dividendRowStatus, REASON_OUT_OF_SCOPE, toUnresolvedItems } from "../../lib/dividend-utils";
-
 export const metadata: Metadata = {
   title: "配当・分配",
 };
@@ -42,6 +36,10 @@ export default async function DividendsPage() {
     forecast.lastYearJpy === 0 ? null : (yearDiff / forecast.lastYearJpy) * 100;
 
   const unresolvedItems = toUnresolvedItems(forecast);
+
+  // 配当対象外（対象外カテゴリ）はメインテーブルから外し、折りたたみで表示する
+  const outOfScopeRows = forecast.rows.filter((row) => row.reason === REASON_OUT_OF_SCOPE);
+  const dividendRows = forecast.rows.filter((row) => row.reason !== REASON_OUT_OF_SCOPE);
 
   return (
     <PageLayout title="配当・分配" options={<DividendSyncButton />}>
@@ -96,49 +94,8 @@ export default async function DividendsPage() {
           </Card>
         </div>
 
-        {/* 3. 12ヶ月カレンダー（グラフ + 表） */}
-        <DividendCalendarChartClient months={forecast.months} />
-        <Card>
-          <CardHeader>
-            <CardTitle icon={CalendarDays}>月別内訳</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {forecast.months.length === 0 ? (
-              <EmptyState icon={CalendarDays} message="月別の配当データがありません" />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <caption className="sr-only">過去12ヶ月＋今後12ヶ月の配当・分配見込み</caption>
-                  <thead>
-                    <tr className="border-b text-left text-muted-foreground">
-                      <th scope="col" className="py-2 pr-4 font-medium">月</th>
-                      <th scope="col" className="py-2 pr-4 font-medium">区分</th>
-                      <th scope="col" className="py-2 pr-4 text-right font-medium">金額</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {forecast.months.map((m: DividendMonthBucket) => (
-                      <tr key={m.month} className="border-b last:border-0">
-                        <td className="py-2 pr-4 tabular-nums">{formatMonth(m.month)}</td>
-                        <td className="py-2 pr-4">
-                          <Badge variant={m.confirmed ? "secondary" : "outline"}>
-                            {m.confirmed ? "確定" : "推定"}
-                          </Badge>
-                        </td>
-                        <td className="py-2 pr-4 text-right">
-                          <AmountDisplay amount={m.amountJpy} size="sm" />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  ※ 配当落ち日ベースの見込みです。実際の入金は銘柄により数週間〜数ヶ月後になります。
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* 3. 12ヶ月カレンダー（グラフ + 月クリック内訳） */}
+        <DividendCalendarChartClient months={forecast.months} payoutMonths={forecast.payoutMonths} />
 
         {/* 4. 銘柄別テーブル */}
         <Card>
@@ -146,10 +103,11 @@ export default async function DividendsPage() {
             <CardTitle icon={TableProperties}>銘柄別の内訳</CardTitle>
           </CardHeader>
           <CardContent>
-            {forecast.rows.length === 0 ? (
-              <EmptyState icon={TableProperties} message="保有銘柄のデータがありません" />
+            {dividendRows.length === 0 ? (
+              <EmptyState icon={TableProperties} message="配当対象の保有銘柄がありません" />
             ) : (
               <div className="overflow-x-auto">
+                <p className="mb-2 text-xs text-muted-foreground">対象 {dividendRows.length}件</p>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
@@ -165,7 +123,7 @@ export default async function DividendsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {forecast.rows.map((row) => {
+                    {dividendRows.map((row) => {
                       const status = dividendRowStatus(row);
                       return (
                         <tr key={row.holdingName} className="border-b last:border-0">
@@ -206,7 +164,7 @@ export default async function DividendsPage() {
                           </td>
                           <td className="py-2 pr-4">
                             <Badge variant={status.variant}>{status.label}</Badge>
-                            {!row.resolved && row.reason && row.reason !== REASON_OUT_OF_SCOPE && (
+                            {!row.resolved && row.reason && (
                               <div className="mt-1 text-xs text-muted-foreground">{row.reason}</div>
                             )}
                           </td>
@@ -219,6 +177,35 @@ export default async function DividendsPage() {
                   ※ 月平均は直近3ヶ月の実績平均です（年間見込み ÷ 12 ではありません）。
                 </p>
               </div>
+            )}
+            {outOfScopeRows.length > 0 && (
+              <details className="mt-4 text-sm">
+                <summary className="cursor-pointer text-muted-foreground">
+                  配当対象外の口座・資産 {outOfScopeRows.length}件
+                </summary>
+                <div className="mt-2 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th scope="col" className="py-2 pr-4 font-medium">銘柄名</th>
+                        <th scope="col" className="py-2 pr-4 font-medium">カテゴリ</th>
+                        <th scope="col" className="py-2 pr-4 text-right font-medium">評価額</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {outOfScopeRows.map((row) => (
+                        <tr key={row.holdingName} className="border-b last:border-0">
+                          <td className="py-2 pr-4">{row.holdingName}</td>
+                          <td className="py-2 pr-4">{row.category ?? "—"}</td>
+                          <td className="py-2 pr-4 text-right">
+                            <AmountDisplay amount={row.value} size="sm" />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
             )}
           </CardContent>
         </Card>

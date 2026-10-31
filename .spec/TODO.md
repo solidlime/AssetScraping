@@ -18,6 +18,7 @@
 - [x] T014: db — 推定ロジック（TTM・年間見込み・月別割付・去年/今年比較、未解決の除外）＋テスト　※`4840538`（季節性）+ `b046e33` + 当月季節性 `0f318a7`
 - [x] T015: web — `/dividends` ページ（今月の見込み／12ヶ月カレンダー／去年vs今年／銘柄別内訳／未解決一覧＋手動設定）　※`9be147a` + `eaca06f`
 - [x] T016: 検証 — typecheck・build・テスト・NAS 反映後の実データ確認とスクショ　※NAS 実データで判定6項目すべて合格（今月見込み 66,136円＝実績59,136+推定7,000／`563A`=26,400円・`408A`=6,600円・`314A`=0円 が「自動（Yahoo）」／四半期払いの KO/VYM/SPYD は当月不加算／react418=0）
+- [x] T028: web/db — `/dividends` カレンダー改善（ユーザー選択2/3/4）— (a) `payoutMonths`（入金日推定: `.T`=配当落ち+3ヶ月 / 米国=+1ヶ月 / 手動設定=0）を追加し「配当落ち / 入金（推定）」トグル、(b) `DividendMonthBucket.byHolding` で月クリック時の銘柄内訳（上位5件＋他N件）、(c) 銘柄別テーブルの配当対象外（預金・現金9行）を `<details>` に折りたたみ。月×銘柄マップ（`addMonthHoldingAmount` / `toMonthBuckets` / `shiftToPayout`）から両ビューを導出し、bucket 合計は `Σ round(slice)` で内訳と常に一致させる。月別内訳テーブルは月クリック内訳と重複するため削除。db 202 passed（+3）
 
 ## 優先度：高（F7: クレカ引き落とし警告）
 - [x] T017: crawler — カード詳細ページから引き落とし予定額・引き落とし日を取得（`parseScheduledWithdrawal`、期日ごとグルーピングと合計突き合わせ）　※`guessCategory` に `card` を追加（bank → card → 以降据え置き）

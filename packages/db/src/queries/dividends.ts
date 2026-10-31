@@ -45,7 +45,18 @@ export type DividendForecastRow = {
   reason: string | null; // 未解決・除外の理由
 };
 
-export type DividendMonthBucket = { month: string; amountJpy: number; confirmed: boolean };
+export type DividendMonthSlice = {
+  holdingName: string;
+  amountJpy: number;
+  confirmed: boolean;
+};
+
+export type DividendMonthBucket = {
+  month: string;
+  amountJpy: number;
+  confirmed: boolean;
+  byHolding: DividendMonthSlice[]; // 金額降順・0円は含めない
+};
 
 export type DividendForecast = {
   fxUsdJpy: number | null;
@@ -55,7 +66,8 @@ export type DividendForecast = {
     estimatedJpy: number;
     totalJpy: number;
   };
-  months: DividendMonthBucket[]; // 過去12ヶ月＋今後12ヶ月（昇順、"YYYY-MM"）
+  months: DividendMonthBucket[]; // 過去12ヶ月＋今後12ヶ月（昇順、"YYYY-MM"）配当落ち基準
+  payoutMonths: DividendMonthBucket[]; // 同 window・入金日（推定）基準
   thisYearJpy: number;
   lastYearJpy: number;
   next12MonthsJpy: number;
@@ -211,8 +223,84 @@ function aggregateHoldings(
   return [...byName.values()];
 }
 
+/** 月×銘柄の金額（lag 適用前＝配当落ち月基準）。 */
+interface MonthHoldingAmount {
+  amountJpy: number;
+  confirmed: boolean;
+  symbol: string | null;
+}
+
+type MonthHoldingMap = Map<string, Map<string, MonthHoldingAmount>>;
+
+function addMonthHoldingAmount(
+  map: MonthHoldingMap,
+  monthKey: string,
+  holdingName: string,
+  amountJpy: number,
+  confirmed: boolean,
+  symbol: string | null,
+): void {
+  const byHolding = map.get(monthKey) ?? new Map<string, MonthHoldingAmount>();
+  const current = byHolding.get(holdingName);
+  if (current) {
+    current.amountJpy += amountJpy;
+    current.confirmed = current.confirmed && confirmed;
+  } else {
+    byHolding.set(holdingName, { amountJpy, confirmed, symbol });
+  }
+  map.set(monthKey, byHolding);
+}
+
+/** 配当落ち月 → 入金月のラグ。日本株は権利確定から支払まで +3ヶ月、米国株は +1ヶ月。 */
+function payoutLagMonths(symbol: string | null): number {
+  if (symbol === null) return 0; // 手動設定（投信・年金）はデータが無いため lag 0
+  return symbol.endsWith(".T") ? 3 : 1;
+}
+
+/** 月×銘柄マップを、window 内の月バケット配列に変換する。 */
+function toMonthBuckets(windowKeys: string[], map: MonthHoldingMap): DividendMonthBucket[] {
+  return windowKeys.map((monthKey) => {
+    const byHolding = [...(map.get(monthKey) ?? new Map<string, MonthHoldingAmount>())]
+      .map(([holdingName, cell]) => ({
+        holdingName,
+        amountJpy: Math.round(cell.amountJpy),
+        confirmed: cell.confirmed,
+      }))
+      .filter((slice) => slice.amountJpy !== 0)
+      .sort((a, b) => b.amountJpy - a.amountJpy);
+    return {
+      month: monthKey,
+      amountJpy: byHolding.reduce((sum, slice) => sum + slice.amountJpy, 0),
+      // 推定が混ざる月は「確定」と言い切らない（嘘の数字を出さない）
+      confirmed: byHolding.length > 0 && byHolding.every((slice) => slice.confirmed),
+      byHolding,
+    };
+  });
+}
+
+/** 配当落ち基準マップを入金月へシフトする。window 外に出た分は落とす。 */
+function shiftToPayout(map: MonthHoldingMap, windowKeys: Set<string>): MonthHoldingMap {
+  const shifted: MonthHoldingMap = new Map();
+  for (const [monthKey, holdings] of map) {
+    for (const [holdingName, cell] of holdings) {
+      const target = shiftYearMonthKey(monthKey, payoutLagMonths(cell.symbol));
+      if (!windowKeys.has(target)) continue;
+      addMonthHoldingAmount(
+        shifted,
+        target,
+        holdingName,
+        cell.amountJpy,
+        cell.confirmed,
+        cell.symbol,
+      );
+    }
+  }
+  return shifted;
+}
+
 /** 解決済みの Yahoo イベント駆動行（月次集計に使う内部表現） */
 interface ResolvedYahooRow {
+  holdingName: string;
   symbol: string;
   currency: "USD" | "JPY";
   fx: number;
@@ -285,6 +373,8 @@ export async function getDividendForecast(
   // --- 銘柄ごとの解決 -------------------------------------------------------
   const rows: DividendForecastRow[] = [];
   const yahooRows: ResolvedYahooRow[] = [];
+  // 手動設定（投信・年金）の月次均等額。内訳表示のため銘柄ごとに保持する。
+  const manualRows: Array<{ holdingName: string; monthlyAmountJpy: number }> = [];
   let annualModeMonthlyTotal = 0;
   let annualModeAnnualTotal = 0;
 
@@ -336,6 +426,7 @@ export async function getDividendForecast(
       base.yieldPct = holding.value === 0 ? null : (annualAmountJpy / holding.value) * 100;
       base.resolved = true;
       rows.push(base);
+      manualRows.push({ holdingName: holding.holdingName, monthlyAmountJpy });
       annualModeMonthlyTotal += monthlyAmountJpy;
       annualModeAnnualTotal += annualAmountJpy;
       continue;
@@ -396,6 +487,7 @@ export async function getDividendForecast(
     rows.push(base);
 
     yahooRows.push({
+      holdingName: holding.holdingName,
       symbol,
       currency,
       fx,
@@ -408,44 +500,68 @@ export async function getDividendForecast(
   }
 
   // --- 月別バケット（過去12ヶ月＋今後12ヶ月） ------------------------------
-  // 実イベント（confirmed）を月別に集計する。
-  const confirmedByMonth = new Map<string, number>();
+  // 月×銘柄で「配当落ち基準」を先に組み立て、lag 後（入金）のビューを導出する。
+  const windowKeys: string[] = [];
+  for (let offset = -11; offset <= 12; offset++) {
+    windowKeys.push(shiftYearMonthKey(currentMonthKey, offset));
+  }
+  const windowKeySet = new Set(windowKeys);
+  const futureKeys = windowKeys.slice(12); // 当月の翌月〜今後12ヶ月
+
+  const exDateByMonth: MonthHoldingMap = new Map();
   for (const row of yahooRows) {
     for (const event of row.events) {
       const monthKey = event.exDate.slice(0, 7);
-      const current = confirmedByMonth.get(monthKey) ?? 0;
-      confirmedByMonth.set(monthKey, current + event.amount * row.quantity * row.fx);
+      // 将来の ex-date イベントは暦月見込みと二重計上になるためバケットでは扱わない
+      // （window より前の月は入金シフトで window に入り得るため残す）
+      if (monthKey > currentMonthKey) continue;
+      addMonthHoldingAmount(
+        exDateByMonth,
+        monthKey,
+        row.holdingName,
+        event.amount * row.quantity * row.fx,
+        true,
+        row.symbol,
+      );
+    }
+  }
+  for (const row of yahooRows) {
+    for (const monthKey of futureKeys) {
+      // 未来月: 同じ暦月の過去実績から季節性を反映した見込みを積む
+      // （四半期払いなら支払い月のみ非ゼロ、毎月払いなら毎月ほぼ均等）
+      addMonthHoldingAmount(
+        exDateByMonth,
+        monthKey,
+        row.holdingName,
+        row.monthlyPerShare[monthParts(monthKey).month]! * row.quantity * row.fx,
+        false,
+        row.symbol,
+      );
+    }
+  }
+  for (const manual of manualRows) {
+    // 手動設定の投信・年金は季節性情報が無いため毎月均等
+    for (const monthKey of futureKeys) {
+      addMonthHoldingAmount(
+        exDateByMonth,
+        monthKey,
+        manual.holdingName,
+        manual.monthlyAmountJpy,
+        false,
+        null,
+      );
     }
   }
 
-  const months: DividendMonthBucket[] = [];
-  for (let offset = -11; offset <= 12; offset++) {
-    const monthKey = shiftYearMonthKey(currentMonthKey, offset);
-    if (offset > 0) {
-      // 未来月: 同じ暦月の過去実績から季節性を反映した見込みを積む
-      // （四半期払いなら支払い月のみ非ゼロ、毎月払いなら毎月ほぼ均等。
-      //   手動設定の投信・年金は季節性情報が無いため毎月均等 = annualModeMonthlyTotal）
-      months.push({
-        month: monthKey,
-        amountJpy: Math.round(
-          futureMonthEstimate(monthParts(monthKey).month, yahooRows, annualModeMonthlyTotal),
-        ),
-        confirmed: false,
-      });
-    } else {
-      months.push({
-        month: monthKey,
-        amountJpy: Math.round(confirmedByMonth.get(monthKey) ?? 0),
-        confirmed: true,
-      });
-    }
-  }
+  const months = toMonthBuckets(windowKeys, exDateByMonth);
+  const payoutMonths = toMonthBuckets(windowKeys, shiftToPayout(exDateByMonth, windowKeySet));
 
   // --- 当月 ---------------------------------------------------------------
   // 当月に ex-date がある銘柄は実イベント（confirmed）に、無い銘柄は「当月の季節性見込み」に算入。
   // 月割り平均（monthlyAmountJpy）は四半期払いでも毎月加算され過大になるため使わない。
   // 手動設定（annualModeMonthlyTotal）は季節性情報が無いので月次均等のまま。
-  const confirmedJpy = Math.round(confirmedByMonth.get(currentMonthKey) ?? 0);
+  // 当月バケットは実イベントのみ（将来月の季節性見込みは入らない）
+  const confirmedJpy = months.find((m) => m.month === currentMonthKey)?.amountJpy ?? 0;
   let estimatedJpy = annualModeMonthlyTotal;
   for (const row of yahooRows) {
     const hasThisMonth = row.events.some((e) => e.exDate.slice(0, 7) === currentMonthKey);
@@ -502,6 +618,7 @@ export async function getDividendForecast(
       totalJpy,
     },
     months,
+    payoutMonths,
     thisYearJpy,
     lastYearJpy,
     next12MonthsJpy,

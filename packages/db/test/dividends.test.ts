@@ -569,3 +569,89 @@ describe("dividend 補助クエリ", () => {
     ]);
   });
 });
+
+describe("入金日（payout）ベースの月別バケット", () => {
+  // window: 2026-01〜2027-12（ex-date 2026-03 が過去かつシフト先も window 内）
+  const NOW_DEC = new Date("2026-12-15T06:30:00.000Z");
+
+  it(".T 銘柄の ex-date は +3ヶ月シフトして入金月に入る", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "日本電信電話", {
+      quantity: 10,
+      value: 1_500_000,
+      code: "9432",
+    });
+    seedEvent(db, "9432.T", "2026-03-01", 100, "JPY");
+
+    const forecast = await getDividendForecast(db, { now: NOW_DEC });
+
+    const exDate = forecast.months.find((m) => m.month === "2026-03")!;
+    expect(exDate.amountJpy).toBe(1000); // 100 × 10 × 1
+    expect(exDate.byHolding).toEqual([
+      { holdingName: "日本電信電話", amountJpy: 1000, confirmed: true },
+    ]);
+
+    // 配当落ち 2026-03 → 入金 2026-06
+    const payout = forecast.payoutMonths.find((m) => m.month === "2026-06")!;
+    expect(payout.amountJpy).toBe(1000);
+    expect(payout.byHolding).toEqual([
+      { holdingName: "日本電信電話", amountJpy: 1000, confirmed: true },
+    ]);
+    // 配当落ち月そのものには入らない
+    expect(forecast.payoutMonths.find((m) => m.month === "2026-03")!.amountJpy).toBe(0);
+    // window の長さ・月範囲は months と同一
+    expect(forecast.payoutMonths.map((m) => m.month)).toEqual(forecast.months.map((m) => m.month));
+  });
+
+  it("米国銘柄の ex-date は +1ヶ月シフトする（KO）", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "コカ-コーラ", {
+      quantity: 300,
+      value: 4_079_196,
+      code: "KO",
+    });
+    seedEvent(db, "KO", "2026-03-13", 0.51, "USD");
+
+    const forecast = await getDividendForecast(db, { now: NOW_DEC });
+
+    expect(forecast.months.find((m) => m.month === "2026-03")!.amountJpy).toBe(24_174);
+    // 配当落ち 2026-03 → 入金 2026-04
+    expect(forecast.payoutMonths.find((m) => m.month === "2026-04")!.amountJpy).toBe(24_174);
+    expect(forecast.payoutMonths.find((m) => m.month === "2026-03")!.amountJpy).toBe(0);
+  });
+
+  it("window 内に収まるシフトでは payoutMonths と months の合計が一致する", async () => {
+    const db = freshDb();
+    const { accountId, snapshotId } = seedBase(db);
+    seedFx(db, "USDJPY", 158);
+    seedHolding(db, accountId, snapshotId, "株式(現物)", "コカ-コーラ", {
+      quantity: 300,
+      value: 4_079_196,
+      code: "KO",
+    });
+    // 4月のみ配当の銘柄。ex-date 2025-04（過去）と 2026-04（見込み）は
+    // どちらも +1ヶ月シフトで window（2025-03〜2027-02）内に収まる。
+    seedEvent(db, "KO", "2025-04-15", 0.51, "USD");
+
+    const forecast = await getDividendForecast(db, { now: NOW_DATE });
+
+    const sum = (buckets: typeof forecast.months) =>
+      buckets.reduce((total, m) => total + m.amountJpy, 0);
+    expect(sum(forecast.months)).toBe(48_348); // 24,174（実績）+ 24,174（見込み）
+    expect(sum(forecast.payoutMonths)).toBe(sum(forecast.months));
+    expect(forecast.payoutMonths).toHaveLength(24);
+
+    // 内訳は金額降順・0円を含めない
+    const april = forecast.months.find((m) => m.month === "2025-04")!;
+    expect(april.byHolding).toEqual([
+      { holdingName: "コカ-コーラ", amountJpy: 24_174, confirmed: true },
+    ]);
+    const may = forecast.payoutMonths.find((m) => m.month === "2025-05")!;
+    expect(may.byHolding).toEqual([
+      { holdingName: "コカ-コーラ", amountJpy: 24_174, confirmed: true },
+    ]);
+  });
+});
