@@ -37,6 +37,8 @@ export const SSNB_URLS = {
    * 月ナビは `?base_date=YYYY/MM/DD`。
    */
   monthlyCashFlow: `${SSNB_BASE_URL}/cf/monthly`,
+  /** 一括更新（全金融機関の再取得をキューに積む）。素の GET は 500 になりやすいのでリンククリック専用 */
+  batchRefresh: `${SSNB_BASE_URL}/faggregation_queue2`,
 } as const;
 
 /** 口座種別（カテゴリ大分類） */

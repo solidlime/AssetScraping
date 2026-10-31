@@ -24,7 +24,27 @@ export const SETTING_KEYS = {
   withdrawalAccountId: "withdrawal_account_id",
   ssnbLoginId: "ssnb_login_id",
   ssnbPassword: "ssnb_password",
+  rescrapeAt: "rescrape_at",
 } as const;
+
+/** 一括更新を押してから再取得するまでの待ち時間（60分固定） */
+export const RESCRAPE_DELAY_MS = 60 * 60 * 1000;
+
+/** 次回の自動再取得時刻（epoch ms）。未設定・不正値は null */
+export function getRescrapeAt(db: Database): number | null {
+  const raw = getSetting(db, SETTING_KEYS.rescrapeAt);
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function setRescrapeAt(db: Database, atMs: number): void {
+  setSetting(db, SETTING_KEYS.rescrapeAt, String(Math.round(atMs)));
+}
+
+export function clearRescrapeAt(db: Database): void {
+  deleteSetting(db, SETTING_KEYS.rescrapeAt);
+}
 
 export function getSetting(db: Database, key: string): string | null {
   const row = db

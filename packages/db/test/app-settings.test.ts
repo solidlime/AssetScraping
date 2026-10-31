@@ -5,13 +5,17 @@ import { createDb, type Database } from "../src/index.js";
 import {
   DEFAULT_LOW_BALANCE_THRESHOLD,
   DEFAULT_SCHEDULED_REFRESH_TIME,
+  RESCRAPE_DELAY_MS,
   SETTING_KEYS,
+  clearRescrapeAt,
   deleteSetting,
   getCrawlerCredential,
   getLowBalanceThreshold,
+  getRescrapeAt,
   getScheduledRefreshTime,
   getSetting,
   normalizeScheduleTime,
+  setRescrapeAt,
   setCrawlerCredential,
   setLowBalanceThreshold,
   setScheduledRefreshTime,
@@ -93,6 +97,35 @@ describe("getScheduledRefreshTime", () => {
   it("不正値は既定値にフォールバック", () => {
     setSetting(db, SETTING_KEYS.scheduledRefreshTime, "25:00");
     expect(getScheduledRefreshTime(db)).toBe(DEFAULT_SCHEDULED_REFRESH_TIME);
+  });
+});
+
+describe("getRescrapeAt / setRescrapeAt", () => {
+  it("未設定は null", () => {
+    expect(getRescrapeAt(db)).toBeNull();
+  });
+
+  it("設定した値を返す（小数は丸める）", () => {
+    const at = Date.now() + RESCRAPE_DELAY_MS;
+    setRescrapeAt(db, at + 0.6);
+    expect(getRescrapeAt(db)).toBe(Math.round(at + 0.6));
+  });
+
+  it("不正値は null", () => {
+    setSetting(db, SETTING_KEYS.rescrapeAt, "abc");
+    expect(getRescrapeAt(db)).toBeNull();
+    setSetting(db, SETTING_KEYS.rescrapeAt, "0");
+    expect(getRescrapeAt(db)).toBeNull();
+  });
+
+  it("clearRescrapeAt で消える", () => {
+    setRescrapeAt(db, Date.now() + RESCRAPE_DELAY_MS);
+    clearRescrapeAt(db);
+    expect(getRescrapeAt(db)).toBeNull();
+  });
+
+  it("待ち時間は 60 分", () => {
+    expect(RESCRAPE_DELAY_MS).toBe(3_600_000);
   });
 });
 
