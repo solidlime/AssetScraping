@@ -143,8 +143,11 @@ export function DividendCalendarChartClient({
   const data = toChartData(buckets);
   const selected = buckets.find((m) => m.month === selectedMonth) ?? null;
 
-  const handleBarClick = (point: unknown) => {
-    setSelectedMonth((point as CalendarPoint).month);
+  // recharts 2 系の Bar onClick は {x,y,width,height,payload} を渡すため、payload を優先して読む
+  const handleBarClick = (entry: unknown) => {
+    const point = entry as { month?: string; payload?: CalendarPoint };
+    const month = point.payload?.month ?? point.month;
+    if (month) setSelectedMonth(month);
   };
 
   return (
