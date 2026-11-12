@@ -602,7 +602,17 @@ export function getAccountAlerts(
   };
   const withdrawalAlerts = buildScheduledWithdrawalAlerts(rows, withdrawalOpts);
   // 固定費はカード予定と同じ口座で合算してから不足判定する（残高を2回使わない）
-  const paymentAlerts = buildScheduledPaymentAlerts(rows, listScheduledPayments(db), withdrawalOpts);
+  const payments = listScheduledPayments(db);
+  const paymentAlerts = buildScheduledPaymentAlerts(rows, payments, withdrawalOpts);
+  // カード側の不足額も固定費込みの口座合計に揃える。ダッシュボードの不足合計と
+  // ここが違う数字を出すと、どちらが正しいか分からなくなる
+  const totalsWithPayments = resolveScheduledPaymentWindow(rows, payments, withdrawalOpts).totals;
+  for (const alert of withdrawalAlerts) {
+    if (alert.shortage === undefined || alert.withdrawalAccountId === undefined) continue;
+    const row = rows.find((r) => r.accountId === alert.withdrawalAccountId);
+    const total = totalsWithPayments.get(alert.withdrawalAccountId);
+    if (row && total !== undefined && total > row.balance) alert.shortage = total - row.balance;
+  }
 
   return [...merged, ...withdrawalAlerts, ...paymentAlerts]
     .sort((x, y) => {

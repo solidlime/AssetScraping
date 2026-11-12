@@ -78,7 +78,7 @@ export default async function AccountsPage() {
                 <li key={item.accountId} className="flex flex-wrap items-center gap-x-3 text-destructive">
                   <span className="text-foreground">「{item.name}」の不足額</span>
                   <span>{item.shortage.toLocaleString("ja-JP")}円</span>
-                  <span className="text-xs text-muted-foreground">（同じ口座を共有するカードの予定額を合算）</span>
+                  <span className="text-xs text-muted-foreground">（同じ口座を共有するカード・固定費の予定額を合算）</span>
                 </li>
               ))}
             </ul>
