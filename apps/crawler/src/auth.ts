@@ -15,8 +15,12 @@ import { createDb, getCrawlerCredential, resolveDbPath, type Database } from "@a
 export const AUTH_STATE_PATH =
   process.env.AUTH_STATE_PATH ?? "/data/auth-state.json";
 
-/** ssnb にログイン済みかどうかを判定するための URL（要認証ページ） */
-const SESSION_CHECK_URL = SSNB_URLS.portfolio;
+/**
+ * ssnb にログイン済みかどうかを判定するための URL（要認証ページ）。
+ * 実測: /bs/portfolio は未認証でも 200 で / にリダイレクトされるため判定に使えない。
+ * /accounts は未認証時に /users/sign_in、2FA 未完了時に /users/two_step_verifications へ飛ぶ。
+ */
+const SESSION_CHECK_URL = SSNB_URLS.accounts;
 
 /** 2FA / メール確認画面の兆候（半角数字・漢字表記の両方を拾う） */
 const TWO_FACTOR_HINTS = [
