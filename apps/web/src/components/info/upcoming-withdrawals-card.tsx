@@ -1,4 +1,9 @@
-import { getDb, getUpcomingWithdrawals, getWithdrawalAlertDays } from "@asset-scraping/db";
+import {
+  getDb,
+  getUpcomingWithdrawals,
+  getWithdrawalAlertDays,
+  summarizeWithdrawalShortages,
+} from "@asset-scraping/db";
 import { CreditCard } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
@@ -10,6 +15,10 @@ export function UpcomingWithdrawalsCard() {
   if (upcoming.length === 0) return null;
 
   const alertDays = getWithdrawalAlertDays(db);
+  // 行の shortage はカードと固定費で別集計なので、口座単位に合算した値で出す
+  const shortages = summarizeWithdrawalShortages(upcoming);
+  const shortageByAccount = new Map(shortages.map((s) => [s.withdrawalAccountId, s.shortage]));
+  const totalShortage = shortages.reduce((sum, s) => sum + s.shortage, 0);
 
   return (
     <Card>
@@ -31,15 +40,20 @@ export function UpcomingWithdrawalsCard() {
               <span className="text-xs text-muted-foreground">
                 {item.remainingDays === 0 ? "今日" : `あと${item.remainingDays}日`}
               </span>
-              {item.shortage !== undefined && (
+              {shortageByAccount.has(item.withdrawalAccountId ?? "") && (
                 <Badge variant="warning">
-                  残高不足 {item.shortage.toLocaleString("ja-JP")}円
+                  この口座で残高不足 {shortageByAccount.get(item.withdrawalAccountId ?? "")!.toLocaleString("ja-JP")}円
                 </Badge>
               )}
               {item.note && <span className="text-xs text-muted-foreground">{item.note}</span>}
             </li>
           ))}
         </ul>
+        {totalShortage > 0 && (
+          <p className="mt-3 text-sm font-semibold text-yellow-700">
+            引き落とし資金の不足合計 {totalShortage.toLocaleString("ja-JP")}円
+          </p>
+        )}
         <p className="mt-3 text-xs text-muted-foreground">
           引き落とし日が直近 {alertDays} 日以内の予定を表示しています。
         </p>
