@@ -71,6 +71,30 @@ export function saveScrapeFailure(
   setSetting(db, SETTING_KEYS.lastScrapeResult, JSON.stringify(result));
 }
 
+/** 警告を出す「データが古すぎる」しきい値（既定24時間） */
+export const DEFAULT_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 直近のスクレイプ状態を警告判断用に整理する（表示文言は呼び側が持つ）。
+ * 警告が不要なら `failedKind === null` かつ `stale === false`。
+ */
+export function describeScrapeState(
+  last: LastScrapeResult | null,
+  nowMs: number,
+  staleAfterMs = DEFAULT_STALE_AFTER_MS,
+): { failedKind: ScrapeFailureKind | null; stale: boolean; hoursSinceSuccess: number | null } | null {
+  if (!last) return null;
+  const lastSuccessMs = last.lastSuccessAt ? Date.parse(last.lastSuccessAt) : Number.NaN;
+  const hoursSinceSuccess = Number.isFinite(lastSuccessMs)
+    ? Math.floor((nowMs - lastSuccessMs) / 3_600_000)
+    : null;
+  return {
+    failedKind: last.ok ? null : (last.kind ?? "other"),
+    stale: hoursSinceSuccess === null || nowMs - lastSuccessMs >= staleAfterMs,
+    hoursSinceSuccess,
+  };
+}
+
 /** 一括更新を押してから再取得するまでの待ち時間（60分固定） */
 export const RESCRAPE_DELAY_MS = 60 * 60 * 1000;
 

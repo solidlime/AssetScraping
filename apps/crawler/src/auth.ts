@@ -5,7 +5,7 @@
  * - 失効時はフルログイン。2FA（メール確認型）を検知したら明示エラーで停止
  *   （黙って空データを書かない）
  */
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { SSNB_URLS } from "@asset-scraping/shared";
@@ -96,6 +96,10 @@ function storageStateExists(): boolean {
   } catch {
     return false;
   }
+}
+
+export function invalidateStorageState(): void {
+  rmSync(AUTH_STATE_PATH, { force: true });
 }
 
 async function isLoggedIn(page: Page): Promise<boolean> {

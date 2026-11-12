@@ -1,6 +1,7 @@
 /**
  * 手動更新・設定 HTTP API (:8766)。
  * - POST /update   → runScrape を実行し、結果サマリを JSON で返す（同時実行は排他）
+ * - POST /relogin  → storageState を捨ててフルログイン→スクレイプまで通す（バナーの再ログイン）
  * - GET  /settings → 設定取得（定期更新時刻 / 残高しきい値 / 認証情報。パスワードは返さない）
  * - PUT  /settings → 設定更新
  * - GET/POST/PUT/DELETE /fixed-costs → 固定費（家賃・電気代等）の CRUD。手動登録専用
@@ -49,7 +50,7 @@ import {
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
 import { pressBatchRefresh } from "./batchRefresh.js";
 import { getOtpStatus, submitOtpCode } from "./otp.js";
-import { closeSession, getSession, LoginRequiredError, TwoFactorRequiredError } from "./auth.js";
+import { closeSession, getSession, invalidateStorageState, LoginRequiredError, TwoFactorRequiredError } from "./auth.js";
 import { SessionExpiredError } from "./fetchPage.js";
 import { isRescrapeDue, nextOccurrenceJst } from "./scheduler.js";
 import { syncDividends, upsertDividendSymbol, validateDividendMapping } from "./dividends.js";
@@ -141,6 +142,29 @@ interface RunOutcome {
   twoFactor?: boolean;
 }
 
+/**
+ * SessionExpiredError のときだけ storageState を捨ててフルログインし直し、1 回だけ同じ処理を再実行する。
+ * 2FA 要求・ログイン失敗はリトライしない（OTP 待ちで固まるだけなので、そのまま失敗として返す）。
+ * リトライの有無を呼び出し元に返すため、状態は `retry.hit` に書き込む（失敗経路でも見える）。
+ */
+export async function runWithSessionRetry<T>(
+  label: string,
+  retry: { hit: boolean },
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!(err instanceof SessionExpiredError)) throw err;
+    console.warn(
+      `[crawler] ${label}: セッション失効を検知。storageState を破棄して再ログインし、1回だけ再試行する`,
+    );
+    retry.hit = true;
+    invalidateStorageState();
+    return await fn();
+  }
+}
+
 /** runScrape の共通実行体。HTTP とスケジューラの両方から呼ぶ（同時実行は排他） */
 async function execRunScrape(
   source: string,
@@ -148,29 +172,39 @@ async function execRunScrape(
 ): Promise<RunOutcome> {
   if (running) return { ok: false, error: "scrape is already running" };
   running = true;
+  // リトライを通した最初の開始時刻（所要時間が分かるように）
   const startedAt = new Date().toISOString();
+  const retry = { hit: false };
   try {
     const options: RunScrapeOptions = {
       history: process.env.SCRAPE_MODE === "history",
       pressBatchRefresh: opts.pressBatchRefresh === true,
       pressBatchRefreshOnly: opts.pressBatchRefreshOnly === true,
     };
-    const stats = await runScrape(getDb(), options);
-    persistScrapeSuccess(source, startedAt, stats.finishedAt);
-    lastResult = { startedAt, finishedAt: stats.finishedAt, ok: true, source };
-    console.log(`[crawler] scrape done (${source}): ${JSON.stringify(stats)}`);
+    const stats = await runWithSessionRetry(`scrape (${source})`, retry, () => runScrape(getDb(), options));
+    // 自動リトライが起きたことを DB から判別できるようにする
+    const effectiveSource = retrySource(source, retry.hit);
+    persistScrapeSuccess(effectiveSource, startedAt, stats.finishedAt);
+    lastResult = { startedAt, finishedAt: stats.finishedAt, ok: true, source: effectiveSource };
+    console.log(`[crawler] scrape done (${effectiveSource}): ${JSON.stringify(stats)}`);
     return { ok: true, stats };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const twoFactor = err instanceof TwoFactorRequiredError;
+    const effectiveSource = retrySource(source, retry.hit);
     const finishedAt = new Date().toISOString();
-    persistScrapeFailure(source, startedAt, finishedAt, err, message);
-    lastResult = { startedAt, finishedAt, ok: false, source, error: message };
-    console.error(`[crawler] scrape failed (${source}):`, message);
+    persistScrapeFailure(effectiveSource, startedAt, finishedAt, err, message);
+    lastResult = { startedAt, finishedAt, ok: false, source: effectiveSource, error: message };
+    console.error(`[crawler] scrape failed (${effectiveSource}):`, message);
     return { ok: false, error: message, twoFactor };
   } finally {
     running = false;
   }
+}
+
+/** 自動リトライが起きた場合だけ source に印を付ける（バナーの出し分けには影響しない） */
+function retrySource(source: string, retried: boolean): string {
+  return retried ? `${source}+relogin-retry` : source;
 }
 
 /**
@@ -182,29 +216,36 @@ async function execPressBatchRefresh(source: string): Promise<RunOutcome> {
   if (running) return { ok: false, error: "scrape is already running" };
   running = true;
   const startedAt = new Date().toISOString();
+  const retry = { hit: false };
   try {
-    const session = await getSession();
-    try {
-      const pressed = await pressBatchRefresh(session.page);
-      if (pressed) {
-        setRescrapeAt(getDb(), Date.now() + RESCRAPE_DELAY_MS);
-        console.log("[crawler] batch refresh pressed (rescrape scheduled in 60min)");
-      } else {
-        console.warn("[crawler] batch refresh link not found");
+    // 一括更新は fetchPage を通らないため現状 SessionExpiredError は出ない（goto が sign_in に飛ぶだけ）。
+    // 将来 fetchPage 経由になったときに失効リトライが効くよう、同じヘルパーに通しておく
+    await runWithSessionRetry(`batch refresh (${source})`, retry, async () => {
+      const session = await getSession();
+      try {
+        const pressed = await pressBatchRefresh(session.page);
+        if (pressed) {
+          setRescrapeAt(getDb(), Date.now() + RESCRAPE_DELAY_MS);
+          console.log("[crawler] batch refresh pressed (rescrape scheduled in 60min)");
+        } else {
+          console.warn("[crawler] batch refresh link not found");
+        }
+      } finally {
+        await closeSession(session);
       }
-    } finally {
-      await closeSession(session);
-    }
+    });
     const finishedAt = new Date().toISOString();
-    persistScrapeSuccess(source, startedAt, finishedAt);
-    lastResult = { startedAt, finishedAt, ok: true, source };
+    const effectiveSource = retrySource(source, retry.hit);
+    persistScrapeSuccess(effectiveSource, startedAt, finishedAt);
+    lastResult = { startedAt, finishedAt, ok: true, source: effectiveSource };
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const finishedAt = new Date().toISOString();
-    persistScrapeFailure(source, startedAt, finishedAt, err, message);
-    lastResult = { startedAt, finishedAt, ok: false, source, error: message };
-    console.error(`[crawler] batch refresh failed (${source}):`, message);
+    const effectiveSource = retrySource(source, retry.hit);
+    persistScrapeFailure(effectiveSource, startedAt, finishedAt, err, message);
+    lastResult = { startedAt, finishedAt, ok: false, source: effectiveSource, error: message };
+    console.error(`[crawler] batch refresh failed (${effectiveSource}):`, message);
     return { ok: false, error: message };
   } finally {
     running = false;
@@ -214,6 +255,22 @@ async function execPressBatchRefresh(source: string): Promise<RunOutcome> {
 async function handleUpdate(res: ServerResponse): Promise<void> {
   const outcome = await execRunScrape("manual", { pressBatchRefresh: true });
   const status = outcome.ok ? 200 : outcome.twoFactor ? 503 : outcome.error === "scrape is already running" ? 409 : 500;
+  sendJson(res, status, outcome.ok ? { ok: true, stats: outcome.stats } : { ok: false, error: outcome.error });
+}
+
+/**
+ * POST /relogin: storageState を捨ててフルログインからやり直し、そのままスクレイプを通す。
+ * ダッシュボードの赤バナーから呼ばれる（同時実行は /update と同じく排他）。
+ */
+async function handleRelogin(res: ServerResponse): Promise<void> {
+  if (running) {
+    sendJson(res, 409, { ok: false, error: "scrape is already running" });
+    return;
+  }
+  invalidateStorageState();
+  // 直前に消したので、リトライで storageState を捨て直すことはない（= フルログイン 1 回）
+  const outcome = await execRunScrape("relogin");
+  const status = outcome.ok ? 200 : 500;
   sendJson(res, status, outcome.ok ? { ok: true, stats: outcome.stats } : { ok: false, error: outcome.error });
 }
 
@@ -508,6 +565,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = (req.url ?? "/").split("?")[0];
   if (req.method === "POST" && url === "/update") {
     await handleUpdate(res);
+    return;
+  }
+  if (req.method === "POST" && url === "/relogin") {
+    await handleRelogin(res);
     return;
   }
   if (req.method === "GET" && url === "/settings") {

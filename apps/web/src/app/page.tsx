@@ -1,5 +1,6 @@
 import { getDb, getLastScrapeResult, hasInvestmentHoldings, type ScrapeFailureKind } from "@asset-scraping/db";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AssetBreakdownChart } from "../components/info/asset-breakdown-chart";
 import { AssetHistoryChart } from "../components/info/asset-history-chart";
 import { DailyChangeCard } from "../components/info/daily-change-card";
@@ -7,6 +8,7 @@ import { MonthlyBalanceCard } from "../components/info/monthly-balance-card";
 import { MonthlyIncomeExpenseChart } from "../components/info/monthly-income-expense-chart";
 import { UpcomingWithdrawalsCard } from "../components/info/upcoming-withdrawals-card";
 import { PageLayout } from "../components/layout/page-layout";
+import { ReloginButton } from "../components/relogin-button.client";
 
 export const metadata: Metadata = {
   title: "ダッシュボード",
@@ -52,6 +54,11 @@ function failureMessage(kind: ScrapeFailureKind | undefined): string {
 /** 24時間以上成功していない（または失敗している）間はバナーを出す */
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
+/** 再ログイン導線を出す失敗理由（two_factor は OTP 入力が要るのでリンクのみ） */
+function showReloginControls(kind: ScrapeFailureKind | undefined): boolean {
+  return kind === "session_expired" || kind === "login_required" || kind === "two_factor";
+}
+
 export default async function DashboardPage() {
   const showDailyChange = await hasInvestmentHoldings();
   const lastScrape = getLastScrapeResult(getDb());
@@ -69,6 +76,21 @@ export default async function DashboardPage() {
             最終成功: {formatJst(lastScrape.lastSuccessAt)} / 失敗: {formatJst(lastScrape.finishedAt)}
             {lastScrape.error ? `（${lastScrape.error.slice(0, 120)}）` : ""}
           </p>
+          {showReloginControls(lastScrape.kind) && (
+            <div className="mt-3">
+              {lastScrape.kind === "two_factor" ? (
+                // OTP はユーザー入力が必須なので、ボタンではなく設定タブの入力欄へ誘導する
+                <p>
+                  認証コードの入力が必要です。
+                  <Link href="/settings" className="ml-1 underline">
+                    設定タブの認証コード入力へ
+                  </Link>
+                </p>
+              ) : (
+                <ReloginButton />
+              )}
+            </div>
+          )}
         </div>
       )}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">

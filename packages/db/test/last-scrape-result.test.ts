@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { createDb, type Database } from "../src/index.js";
 import {
+  describeScrapeState,
   SETTING_KEYS,
   getLastScrapeResult,
   saveScrapeFailure,
@@ -98,5 +99,49 @@ describe("saveScrapeSuccess / saveScrapeFailure", () => {
     expect(result?.ok).toBe(true);
     expect(result?.error).toBeUndefined();
     expect(result?.kind).toBeUndefined();
+  });
+});
+
+describe("describeScrapeState", () => {
+  const lastSuccessAt = "2026-05-02T00:00:10.000Z";
+  const success = {
+    ok: true,
+    source: "manual",
+    startedAt: "2026-05-02T00:00:00.000Z",
+    finishedAt: lastSuccessAt,
+    lastSuccessAt,
+  };
+  const failure = {
+    ...success,
+    ok: false,
+    error: "セッション切れ",
+    kind: "session_expired" as const,
+  };
+  const base = Date.parse(lastSuccessAt);
+
+  it("未記録は null", () => {
+    expect(describeScrapeState(null, base)).toBeNull();
+  });
+
+  it("成功直後は警告不要", () => {
+    const state = describeScrapeState(success, base + 60_000);
+    expect(state).toMatchObject({ failedKind: null, stale: false, hoursSinceSuccess: 0 });
+  });
+
+  it("成功でも24時間超なら stale", () => {
+    const state = describeScrapeState(success, base + 25 * 3_600_000);
+    expect(state?.failedKind).toBeNull();
+    expect(state?.stale).toBe(true);
+    expect(state?.hoursSinceSuccess).toBe(25);
+  });
+
+  it("失敗は kind を返す（成功時刻は引き継がれる）", () => {
+    const state = describeScrapeState(failure, base + 60_000);
+    expect(state).toMatchObject({ failedKind: "session_expired", stale: false });
+  });
+
+  it("kind 無しの失敗は other に丸める", () => {
+    const state = describeScrapeState({ ...failure, kind: undefined }, base);
+    expect(state?.failedKind).toBe("other");
   });
 });
