@@ -55,7 +55,7 @@ export function UpcomingWithdrawalsCard() {
           </p>
         )}
         <p className="mt-3 text-xs text-muted-foreground">
-          引き落とし日が直近 {alertDays} 日以内の予定を表示しています。
+          引き落とし日が直近 {alertDays} 日以内、または金額が確定した予定を表示しています。
         </p>
       </CardContent>
     </Card>
