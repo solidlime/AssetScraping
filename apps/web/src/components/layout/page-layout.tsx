@@ -1,4 +1,5 @@
 import { ExternalLink as ExternalLinkIcon } from "lucide-react";
+import { OtpForm } from "../settings/otp-form.client";
 import { ExternalLink } from "../ui/external-link";
 
 interface PageLayoutProps {
@@ -28,6 +29,8 @@ export function PageLayout({ title, href, options, children }: PageLayoutProps) 
           </h1>
           {options && <div className="flex items-center gap-3 self-end sm:self-auto">{options}</div>}
         </div>
+        {/* 2FA 待ち中はどのページでも入力できるようにする（バナーの「再ログイン」はトップに出るため） */}
+        <OtpForm />
         {children}
       </div>
     </main>
