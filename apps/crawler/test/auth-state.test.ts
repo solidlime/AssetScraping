@@ -88,3 +88,31 @@ describe("runWithSessionRetry", () => {
     expect(retry.hit).toBe(false);
   });
 });
+
+describe("isUnauthenticatedUrl", () => {
+  const load = () => import("../src/auth.js");
+
+  it("sign_in は未認証", async () => {
+    const { isUnauthenticatedUrl } = await load();
+    expect(isUnauthenticatedUrl("https://ssnb.x.moneyforward.com/users/sign_in")).toBe(true);
+  });
+
+  it("2FA 未完了も未認証として扱う（ログイン済みと誤認すると取得が必ず失効する）", async () => {
+    const { isUnauthenticatedUrl } = await load();
+    expect(
+      isUnauthenticatedUrl("https://ssnb.x.moneyforward.com/users/two_step_verifications"),
+    ).toBe(true);
+  });
+
+  it("通常ページは認証済み", async () => {
+    const { isUnauthenticatedUrl } = await load();
+    expect(isUnauthenticatedUrl("https://ssnb.x.moneyforward.com/accounts")).toBe(false);
+    expect(isUnauthenticatedUrl("https://ssnb.x.moneyforward.com/bs/portfolio")).toBe(false);
+  });
+
+  it("isTwoFactorUrl は 2FA 画面だけ true", async () => {
+    const { isTwoFactorUrl } = await load();
+    expect(isTwoFactorUrl("https://ssnb.x.moneyforward.com/users/two_step_verifications")).toBe(true);
+    expect(isTwoFactorUrl("https://ssnb.x.moneyforward.com/users/sign_in")).toBe(false);
+  });
+});

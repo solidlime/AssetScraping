@@ -18,7 +18,7 @@ export const AUTH_STATE_PATH =
 /** ssnb にログイン済みかどうかを判定するための URL（要認証ページ） */
 const SESSION_CHECK_URL = SSNB_URLS.portfolio;
 
-/** 2FA / メール確認画面の兆候 */
+/** 2FA / メール確認画面の兆候（半角数字・漢字表記の両方を拾う） */
 const TWO_FACTOR_HINTS = [
   "確認コード",
   "認証コード",
@@ -27,7 +27,20 @@ const TWO_FACTOR_HINTS = [
   "verification code",
   "confirm your",
   "二段階認証",
+  "2段階認証",
 ];
+
+/** 未認証・2FA 未完了を意味する URL。ここに飛んだらログイン済みとは見なさない */
+const UNAUTHENTICATED_PATH_MARKERS = ["/users/sign_in", "/users/two_step_verifications"];
+
+export function isUnauthenticatedUrl(url: string): boolean {
+  return UNAUTHENTICATED_PATH_MARKERS.some((p) => url.includes(p));
+}
+
+/** 2FA 入力待ちの URL か */
+export function isTwoFactorUrl(url: string): boolean {
+  return url.includes("/users/two_step_verifications");
+}
 
 export class TwoFactorRequiredError extends Error {
   constructor(message = "OTP 入力がタイムアウトしました。web UI から認証コードを入力して再実行してください。") {
@@ -107,8 +120,10 @@ async function isLoggedIn(page: Page): Promise<boolean> {
     waitUntil: "domcontentloaded",
     timeout: 30_000,
   });
-  // Rails は未認証だと 302 → /users/sign_in に飛ぶ
-  if (page.url().includes("/users/sign_in")) return false;
+  // Rails は未認証だと 302 → /users/sign_in に飛ぶ。
+  // 2FA 未完了も「ログインしていない」扱いにする（two_step_verifications を成功と誤認すると、
+  // フルログインせずに取得へ進み、直後の fetch で失効する）。
+  if (isUnauthenticatedUrl(page.url())) return false;
   if (res && res.status() >= 400) return false;
   return true;
 }
@@ -227,6 +242,7 @@ export async function getSession(headless = true): Promise<Session> {
     const otpSubmit = page
       .locator(
         [
+          'form[action$="/two_step_verifications/verify"] input[type="submit"]',
           "#submitto",
           'button:text-is("認証する")',
           'button:text-is("Verify")',
@@ -238,15 +254,22 @@ export async function getSession(headless = true): Promise<Session> {
     if (await otpSubmit.count()) await otpSubmit.click();
     await page.waitForLoadState("domcontentloaded", { timeout: 30_000 });
     resetOtp();
+    // 送信後も 2FA 画面に留まる＝コードが不正か期限切れ
+    if (isTwoFactorUrl(page.url())) {
+      await browser.close();
+      throw new TwoFactorRequiredError(
+        "認証コードが受理されませんでした（期限切れか誤入力）。設定タブから最新のコードを入力して再実行してください。",
+      );
+    }
   }
 
-  // OTP 画面が出なかった場合のフォールバック（ヒント文案のみ）
+  // OTP 画面が出なかった場合のフォールバック（URL とヒント文案で判定）
   const bodyText = await page.locator("body").innerText().catch(() => "");
-  if (page.url().includes("/users/sign_in") || containsTwoFactorHint(bodyText)) {
-    if (containsTwoFactorHint(bodyText)) {
-      await browser.close();
-      throw new TwoFactorRequiredError();
-    }
+  if (isTwoFactorUrl(page.url()) || containsTwoFactorHint(bodyText)) {
+    await browser.close();
+    throw new TwoFactorRequiredError();
+  }
+  if (page.url().includes("/users/sign_in")) {
     await browser.close();
     throw new LoginRequiredError(
       "ログイン後も sign_in に滞留しています。認証情報が不正か、フォーム構造が変わった可能性があります。",
