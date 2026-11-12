@@ -62,6 +62,8 @@ interface AlertRow {
   withdrawalAccountId: string | null;
   scheduledWithdrawalAmount: number | null;
   scheduledWithdrawalDate: string | null;
+  /** マネフォが請求額を確定させたか。true なら日数に関係なく予定として扱う */
+  scheduledWithdrawalConfirmed: boolean;
 }
 
 /** 期日までの日数（today より過去は負）。YYYY-MM-DD 同士の単純差分 */
@@ -196,7 +198,10 @@ function resolveWithdrawalWindow(
   const inWindow = rows.filter((row) => {
     if (row.scheduledWithdrawalAmount === null || row.scheduledWithdrawalDate === null) return false;
     const remaining = daysUntil(opts.today, row.scheduledWithdrawalDate);
-    return remaining >= 0 && remaining <= opts.alertDays;
+    if (remaining < 0) return false;
+    // 金額が確定していれば日数で切らない。カードの予定額は毎月14日頃に確定するので、
+    // 「引き落とし日の N 日前」まで待つと確定済みの請求を無視してしまう
+    return row.scheduledWithdrawalConfirmed || remaining <= opts.alertDays;
   });
   if (inWindow.length === 0) return null;
 
@@ -521,12 +526,17 @@ function loadAlertRows(db: Database): AlertRow[] {
       withdrawalAccountId: accounts.withdrawalAccountId,
       scheduledWithdrawalAmount: accountStatuses.scheduledWithdrawalAmount,
       scheduledWithdrawalDate: accountStatuses.scheduledWithdrawalDate,
+      scheduledWithdrawalConfirmed: accountStatuses.scheduledWithdrawalConfirmed,
     })
     .from(accounts)
     .innerJoin(accountStatuses, eq(accountStatuses.accountId, accounts.id))
     .leftJoin(institutionCategories, eq(institutionCategories.id, accounts.categoryId))
     .all()
-    .map((row) => ({ ...row, balance: row.balance ?? 0 }));
+    .map((row) => ({
+      ...row,
+      balance: row.balance ?? 0,
+      scheduledWithdrawalConfirmed: row.scheduledWithdrawalConfirmed === true,
+    }));
 }
 
 /**

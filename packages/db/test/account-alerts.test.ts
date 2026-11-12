@@ -61,7 +61,7 @@ function seedBankCategory(): number {
 function seedCard(
   id: string,
   name: string,
-  opts: { amount: number | null; date: string | null; withdrawalAccountId?: string },
+  opts: { amount: number | null; date: string | null; withdrawalAccountId?: string; confirmed?: boolean },
 ): void {
   seedAccount(id, name, name, 0);
   db.update(schema.accounts)
@@ -75,7 +75,7 @@ function seedCard(
     .set({
       scheduledWithdrawalAmount: opts.amount,
       scheduledWithdrawalDate: opts.date,
-      scheduledWithdrawalConfirmed: opts.amount !== null && opts.date !== null,
+      scheduledWithdrawalConfirmed: opts.confirmed ?? false,
     })
     .where(eq(schema.accountStatuses.accountId, id))
     .run();
@@ -204,8 +204,24 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
 
   it("期日が N 日を超えて先なら警告しない", () => {
     seedAccount("bank-1", "青空銀行", "青空銀行", 0, "ok", seedBankCategory());
-    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(DEFAULT_WITHDRAWAL_ALERT_DAYS + 1) });
+    seedCard("card-1", "三井住友カード", {
+      amount: 75_267,
+      date: dayOffset(DEFAULT_WITHDRAWAL_ALERT_DAYS + 1),
+      confirmed: false,
+    });
     expect(scheduledKinds()).toHaveLength(0);
+  });
+
+  it("金額が確定していれば窓の外でも予定に含める", () => {
+    // カードの請求額は毎月14日頃に確定する。確定済みなら引き落とし日が先でも予定として見せる
+    seedAccount("bank-1", "青空銀行", "青空銀行", 0, "ok", seedBankCategory());
+    seedCard("card-1", "楽天カード", {
+      amount: 281_376,
+      date: dayOffset(DEFAULT_WITHDRAWAL_ALERT_DAYS + 1),
+      withdrawalAccountId: "bank-1",
+      confirmed: true,
+    });
+    expect(getUpcomingWithdrawals(db, { today: TODAY }).map((i) => i.accountId)).toEqual(["card-1"]);
   });
 
   it("金額が欠損なら警告しない（誤警告より無警告）", () => {
