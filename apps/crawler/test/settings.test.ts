@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { closeTestDb, createTestDb, resetTestDb } from "@asset-scraping/db/test-helpers";
-import { accounts, accountStatuses, type Database } from "@asset-scraping/db";
+import { accounts, accountStatuses, DEFAULT_WITHDRAWAL_ALERT_DAYS, type Database } from "@asset-scraping/db";
 import { applySettingsUpdate, settingsPayload } from "../src/server.js";
 
 const db: Database = createTestDb();
@@ -111,7 +111,7 @@ describe("applySettingsUpdate の cardWithdrawalLinks", () => {
     expect(settingsPayload(db)).toMatchObject({
       scheduledRefreshTime: "06:00",
       lowBalanceThreshold: 100_000,
-      withdrawalAlertDays: 7,
+      withdrawalAlertDays: DEFAULT_WITHDRAWAL_ALERT_DAYS,
     });
   });
 

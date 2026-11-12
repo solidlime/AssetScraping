@@ -8,6 +8,7 @@ import {
   countUnresolvedCards,
   getAccountAlerts,
   getUpcomingWithdrawals,
+  summarizeWithdrawalShortages,
   getWithdrawalAccountState,
   type AccountAlert,
 } from "../src/repositories/alerts.js";
@@ -203,7 +204,7 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
 
   it("期日が N 日を超えて先なら警告しない", () => {
     seedAccount("bank-1", "青空銀行", "青空銀行", 0, "ok", seedBankCategory());
-    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(8) });
+    seedCard("card-1", "三井住友カード", { amount: 75_267, date: dayOffset(DEFAULT_WITHDRAWAL_ALERT_DAYS + 1) });
     expect(scheduledKinds()).toHaveLength(0);
   });
 
@@ -366,12 +367,12 @@ describe("getAccountAlerts / scheduled_withdrawal", () => {
     expect(withdrawn(0)).toHaveLength(0);
     expect(withdrawn(-5)).toHaveLength(0);
     expect(withdrawn(1)).toHaveLength(0);
-    // 非数値は既定 7 日: 3 日後は窓内
+    // 非数値は既定日数: 3 日後は窓内
     expect(withdrawn(Number.NaN)).toHaveLength(1);
     // 上限超は MAX=30 に丸められる
     expect(withdrawn(31)).toHaveLength(1);
-    // 8 日後は既定 7 日の窓外（既定で動いていることの裏取り）
-    seedCard("card-2", "楽天カード", { amount: 75_267, date: dayOffset(8) });
+    // 既定日数の窓外（既定で動いていることの裏取り）
+    seedCard("card-2", "楽天カード", { amount: 75_267, date: dayOffset(DEFAULT_WITHDRAWAL_ALERT_DAYS + 1) });
     expect(withdrawn(Number.NaN).map((a) => a.accountId)).toEqual(["card-1"]);
     expect(withdrawn(30).map((a) => a.accountId)).toEqual(["card-1", "card-2"]);
   });
@@ -781,5 +782,18 @@ describe("getUpcomingWithdrawals / 固定費", () => {
     seedCard("card-1", "カード", { amount: 30_000, date: "2026-10-29", withdrawalAccountId: "bank-1" });
     seedFixedCost("rent", "家賃", 50_000, 26, "bank-1");
     expect(getUpcomingWithdrawals(db, { today: TODAY }).map((u) => u.date)).toEqual(["2026-10-26", "2026-10-29"]);
+  });
+
+  it("totalWithdrawalShortage は同一口座の複数予定を二重計上しない", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 10_000);
+    // 同じ口座から 30,000（クレカ）と 20,000（家賃）が落ちる → 口座単位の不足は 40,000（50,000 - 10,000）
+    seedCard("card-1", "カード", { amount: 30_000, date: "2026-10-26", withdrawalAccountId: "bank-1" });
+    seedFixedCost("rent", "家賃", 20_000, 26, "bank-1");
+    const shortages = summarizeWithdrawalShortages(getUpcomingWithdrawals(db, { today: TODAY }));
+    expect(shortages).toHaveLength(1);
+    expect(shortages[0]!.withdrawalAccountId).toBe("bank-1");
+    expect(shortages[0]!.amount).toBe(50_000);
+    expect(shortages[0]!.shortage).toBe(40_000);
+    expect(shortages[0]!.items).toHaveLength(2);
   });
 });

@@ -6,7 +6,9 @@ import {
   createDb,
   describeScrapeState,
   getLastScrapeResult,
+  getUpcomingWithdrawals,
   resolveDbPath,
+  summarizeWithdrawalShortages,
 } from "@asset-scraping/db";
 
 /** 失敗種別の日本語ラベル（バナーと同じ語彙） */
@@ -57,6 +59,29 @@ export function scrapeWarning(db: Database): string | null {
   return lines.join("\n");
 }
 
+/**
+ * 引き落とし資金の不足警告（不要なら null）。
+ * 金額不足は最も重要な情報なので、どのツール呼び出しでも結果の先頭に添える。
+ */
+export function withdrawalWarning(db: Database): string | null {
+  const shortfalls = summarizeWithdrawalShortages(getUpcomingWithdrawals(db));
+  if (shortfalls.length === 0) return null;
+
+  const yen = (n: number) => `${n.toLocaleString("ja-JP")}円`;
+  const total = shortfalls.reduce((sum, s) => sum + s.shortage, 0);
+  const lines = [
+    `⚠ 引き落とし資金が不足しています（不足合計 ${yen(total)}）。入金か口座間の振替が必要です。`,
+  ];
+  for (const s of shortfalls) {
+    const days = Math.round((Date.parse(`${s.date}T00:00:00+09:00`) - Date.now()) / 86_400_000);
+    const names = s.items.map((i) => i.paymentName ?? i.accountName).join(" + ");
+    lines.push(
+      `  ${s.date}（${days}日後）${s.withdrawalAccountName}: 予定 ${yen(s.amount)}（${names}） / 残高 ${yen(s.balance)} / 不足 ${yen(s.shortage)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 export function openReadOnlyDb(): Database {
   const path = resolveDbPath();
   // Docker では file:/data/asset-scraping.db?mode=ro を DB_PATH に指定する。
@@ -83,9 +108,11 @@ export async function dbTool<T>(query: (db: Database) => T | Promise<T>): Promis
     // async クエリ（getFinancialMetrics 等）も受け取れるよう await する。
     // 同期クエリでは await が素通しになるだけで挙動は変わらない。
     const result = await query(db);
-    const warning = scrapeWarning(db);
     const content: Array<{ type: "text"; text: string }> = [];
-    if (warning) content.push({ type: "text", text: warning });
+    // 順序は「取得失敗」→「資金不足」。どちらも先頭に置き、結果本体は最後
+    for (const warning of [scrapeWarning(db), withdrawalWarning(db)]) {
+      if (warning) content.push({ type: "text", text: warning });
+    }
     content.push({ type: "text", text: JSON.stringify(result, null, 2) });
     return { content };
   } catch (err) {

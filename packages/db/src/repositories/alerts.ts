@@ -367,6 +367,59 @@ export interface UpcomingWithdrawal {
  * /accounts の警告（不足時のみ）とは別に、ダッシュボードで予定を見せる用途。
  * 並び: 期日昇順 → 金額降順 → accountId 昇順（種別では分けない）。
  */
+/** 口座単位に集約した不足。カードと固定費が同じ口座から落ちる場合を正しく合算する */
+export interface WithdrawalShortage {
+  withdrawalAccountId: string;
+  withdrawalAccountName: string;
+  /** この口座から落ちる予定の合計額 */
+  amount: number;
+  balance: number;
+  shortage: number;
+  /** この口座の予定日のうち最も早い日 (YYYY-MM-DD) */
+  date: string;
+  items: UpcomingWithdrawal[];
+}
+
+/**
+ * 不足している口座だけを返す（不足なしは含めない）。
+ * `UpcomingWithdrawal.shortage` はカードと固定費で別々に計算されるため、行単位で足すと
+ * 同一口座の不足を過小評価する。ここで口座ごとに金額を合算してから残高と比べる。
+ */
+export function summarizeWithdrawalShortages(items: UpcomingWithdrawal[]): WithdrawalShortage[] {
+  const byAccount = new Map<
+    string,
+    { amount: number; balance: number; date: string; name: string; items: UpcomingWithdrawal[] }
+  >();
+  for (const item of items) {
+    const id = item.withdrawalAccountId;
+    if (id === undefined || item.balance === undefined) continue;
+    const entry = byAccount.get(id) ?? {
+      amount: 0,
+      balance: item.balance,
+      date: item.date,
+      name: item.withdrawalAccountName ?? "",
+      items: [],
+    };
+    entry.amount += item.amount;
+    entry.balance = item.balance;
+    if (item.date < entry.date) entry.date = item.date;
+    entry.items.push(item);
+    byAccount.set(id, entry);
+  }
+  return [...byAccount.entries()]
+    .map(([id, e]) => ({
+      withdrawalAccountId: id,
+      withdrawalAccountName: e.name,
+      amount: e.amount,
+      balance: e.balance,
+      shortage: Math.max(0, e.amount - e.balance),
+      date: e.date,
+      items: e.items,
+    }))
+    .filter((s) => s.shortage > 0)
+    .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : b.shortage - a.shortage));
+}
+
 export function getUpcomingWithdrawals(
   db: Database,
   opts: { withdrawalAlertDays?: number; withdrawalAccountId?: string | null; today?: string } = {},

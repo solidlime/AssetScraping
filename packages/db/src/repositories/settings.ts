@@ -13,7 +13,8 @@ export const DEFAULT_LOW_BALANCE_THRESHOLD = 100_000;
 /** 本家 crontab の定期更新時刻相当（6:00 JST。本家は 6:30 / 15:30 の 2 本） */
 export const DEFAULT_SCHEDULED_REFRESH_TIME = "06:00";
 /** F7: 引き落とし日まで何日以内なら警告するかの既定値 */
-export const DEFAULT_WITHDRAWAL_ALERT_DAYS = 7;
+/** 引き落とし警告を出し始める既定日数。カードの予定額は毎月14日頃に確定するので、引き落としの14日前から出す */
+export const DEFAULT_WITHDRAWAL_ALERT_DAYS = 14;
 export const MIN_WITHDRAWAL_ALERT_DAYS = 1;
 export const MAX_WITHDRAWAL_ALERT_DAYS = 30;
 
