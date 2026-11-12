@@ -25,6 +25,7 @@ export const SETTING_KEYS = {
   ssnbLoginId: "ssnb_login_id",
   ssnbPassword: "ssnb_password",
   rescrapeAt: "rescrape_at",
+  rescrape2At: "rescrape2_at",
   lastScrapeResult: "last_scrape_result",
 } as const;
 
@@ -98,6 +99,18 @@ export function describeScrapeState(
 /** 一括更新を押してから再取得するまでの待ち時間（60分固定） */
 export const RESCRAPE_DELAY_MS = 60 * 60 * 1000;
 
+/** 2回目の再取得までの待ち時間。MF 側の取り込みが夕方までかかることがあるため 12 時間後にもう一度取る */
+export const RESCRAPE_SECOND_DELAY_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * 押下（または「更新中」検出）から、+60分の1回目と+12時間の2回目をまとめて張る。
+ * 押し直すと両方上書きされる（多重予約は残さない）。
+ */
+export function scheduleRescrapes(db: Database, fromMs: number): void {
+  setRescrapeAt(db, fromMs + RESCRAPE_DELAY_MS);
+  setRescrape2At(db, fromMs + RESCRAPE_SECOND_DELAY_MS);
+}
+
 /** 次回の自動再取得時刻（epoch ms）。未設定・不正値は null */
 export function getRescrapeAt(db: Database): number | null {
   const raw = getSetting(db, SETTING_KEYS.rescrapeAt);
@@ -112,6 +125,22 @@ export function setRescrapeAt(db: Database, atMs: number): void {
 
 export function clearRescrapeAt(db: Database): void {
   deleteSetting(db, SETTING_KEYS.rescrapeAt);
+}
+
+/** 2回目の自動再取得時刻（epoch ms）。未設定・不正値は null */
+export function getRescrape2At(db: Database): number | null {
+  const raw = getSetting(db, SETTING_KEYS.rescrape2At);
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function setRescrape2At(db: Database, atMs: number): void {
+  setSetting(db, SETTING_KEYS.rescrape2At, String(Math.round(atMs)));
+}
+
+export function clearRescrape2At(db: Database): void {
+  deleteSetting(db, SETTING_KEYS.rescrape2At);
 }
 
 export function getSetting(db: Database, key: string): string | null {

@@ -6,16 +6,19 @@ import {
   DEFAULT_LOW_BALANCE_THRESHOLD,
   DEFAULT_SCHEDULED_REFRESH_TIME,
   RESCRAPE_DELAY_MS,
+  RESCRAPE_SECOND_DELAY_MS,
   SETTING_KEYS,
   clearRescrapeAt,
   deleteSetting,
   getCrawlerCredential,
   getLowBalanceThreshold,
   getRescrapeAt,
+  getRescrape2At,
   getScheduledRefreshTime,
   getSetting,
   normalizeScheduleTime,
   setRescrapeAt,
+  scheduleRescrapes,
   setCrawlerCredential,
   setLowBalanceThreshold,
   setScheduledRefreshTime,
@@ -126,6 +129,24 @@ describe("getRescrapeAt / setRescrapeAt", () => {
 
   it("待ち時間は 60 分", () => {
     expect(RESCRAPE_DELAY_MS).toBe(3_600_000);
+  });
+});
+
+describe("scheduleRescrapes", () => {
+  it("+60分の1回目と+12時間の2回目を張る", () => {
+    const t = Date.parse("2026-02-14T09:00:00+09:00");
+    scheduleRescrapes(db, t);
+    expect(getRescrapeAt(db)).toBe(t + RESCRAPE_DELAY_MS);
+    expect(getRescrape2At(db)).toBe(t + RESCRAPE_SECOND_DELAY_MS);
+  });
+
+  it("押し直すと両方上書きされる（多重予約を残さない）", () => {
+    const t = Date.parse("2026-02-14T09:00:00+09:00");
+    scheduleRescrapes(db, t);
+    const t2 = t + 3_600_000;
+    scheduleRescrapes(db, t2);
+    expect(getRescrapeAt(db)).toBe(t2 + RESCRAPE_DELAY_MS);
+    expect(getRescrape2At(db)).toBe(t2 + RESCRAPE_SECOND_DELAY_MS);
   });
 });
 

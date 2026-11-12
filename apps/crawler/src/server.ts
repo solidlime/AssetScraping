@@ -21,19 +21,20 @@ import {
   getCrawlerCredential,
   getLowBalanceThreshold,
   getRescrapeAt,
+  getRescrape2At,
   getScheduledRefreshTime,
   getWithdrawalAccountId,
   getWithdrawalAlertDays,
   isBankLikeAccount,
   createScheduledPayment,
+  clearRescrape2At,
   deleteScheduledPayment,
   listScheduledPayments,
   resolveDbPath,
   resolveCrawlerCredential,
-  RESCRAPE_DELAY_MS,
+  scheduleRescrapes,
   setCrawlerCredential,
   setLowBalanceThreshold,
-  setRescrapeAt,
   setScheduledRefreshTime,
   setWithdrawalAccountId,
   setWithdrawalAlertDays,
@@ -185,9 +186,9 @@ async function execRunScrape(
     // 取得中に「更新中」の金融機関があった場合、その値は古いままなので 60 分後に取り直す。
     // 押すだけ経路（execPressBatchRefresh）と同じ予約を、手動更新・再ログインにも張る。
     if (stats.updatingAccounts && stats.updatingAccounts.length > 0) {
-      setRescrapeAt(getDb(), Date.now() + RESCRAPE_DELAY_MS);
+      scheduleRescrapes(getDb(), Date.now());
       console.log(
-        `[crawler] ${stats.updatingAccounts.length} 件が更新中のため 60 分後に再取得します: ${stats.updatingAccounts.join(", ")}`,
+        `[crawler] ${stats.updatingAccounts.length} 件が更新中のため 60 分後と 12 時間後に再取得します: ${stats.updatingAccounts.join(", ")}`,
       );
     }
     // 自動リトライが起きたことを DB から判別できるようにする
@@ -233,8 +234,8 @@ async function execPressBatchRefresh(source: string): Promise<RunOutcome> {
       try {
         const pressed = await pressBatchRefresh(session.page);
         if (pressed) {
-          setRescrapeAt(getDb(), Date.now() + RESCRAPE_DELAY_MS);
-          console.log("[crawler] batch refresh pressed (rescrape scheduled in 60min)");
+          scheduleRescrapes(getDb(), Date.now());
+          console.log("[crawler] batch refresh pressed (rescrape scheduled in 60min and 12h)");
         } else {
           console.warn("[crawler] batch refresh link not found");
         }
@@ -521,6 +522,12 @@ export function schedulerTick(now = new Date()): boolean {
   if (isRescrapeDue(getRescrapeAt(db), now)) {
     clearRescrapeAt(db);
     void execRunScrape("rescrape", { pressBatchRefresh: false });
+    return true;
+  }
+  // 押下の 12 時間後に2回目。MF 側の取り込みが夕方までずれ込む金融機関を抱えるため
+  if (isRescrapeDue(getRescrape2At(db), now)) {
+    clearRescrape2At(db);
+    void execRunScrape("rescrape2", { pressBatchRefresh: false });
     return true;
   }
   // 設定時刻は毎 tick DB から読み直す（UI 変更が即反映される）
