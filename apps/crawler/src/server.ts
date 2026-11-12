@@ -41,12 +41,16 @@ import {
   validateScheduleTime,
   validateScheduledPayment,
   validateWithdrawalAlertDays,
+  saveScrapeFailure,
+  saveScrapeSuccess,
   type Database,
+  type ScrapeFailureKind,
 } from "@asset-scraping/db";
 import { runScrape, type RunScrapeOptions } from "./scrape.js";
 import { pressBatchRefresh } from "./batchRefresh.js";
 import { getOtpStatus, submitOtpCode } from "./otp.js";
-import { closeSession, getSession, TwoFactorRequiredError } from "./auth.js";
+import { closeSession, getSession, LoginRequiredError, TwoFactorRequiredError } from "./auth.js";
+import { SessionExpiredError } from "./fetchPage.js";
 import { isRescrapeDue, nextOccurrenceJst } from "./scheduler.js";
 import { syncDividends, upsertDividendSymbol, validateDividendMapping } from "./dividends.js";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -90,6 +94,46 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
+/** 失敗の分類。kind はダッシュボードのバナー文言の出し分けに使う */
+function classifyScrapeFailure(err: unknown): ScrapeFailureKind {
+  if (err instanceof SessionExpiredError) return "session_expired";
+  if (err instanceof TwoFactorRequiredError) return "two_factor";
+  if (err instanceof LoginRequiredError) return "login_required";
+  return "other";
+}
+
+/**
+ * スクレイプ結果を app_settings に永続化する。
+ * DB 書き込み自体の失敗でスクレイプのエラー処理を壊さないよう、握りつぶして警告のみ。
+ */
+function persistScrapeSuccess(source: string, startedAt: string, finishedAt: string): void {
+  try {
+    saveScrapeSuccess(getDb(), { source, startedAt, finishedAt });
+  } catch (err) {
+    console.warn("[crawler] failed to persist scrape success:", err);
+  }
+}
+
+function persistScrapeFailure(
+  source: string,
+  startedAt: string,
+  finishedAt: string,
+  err: unknown,
+  message: string,
+): void {
+  try {
+    saveScrapeFailure(getDb(), {
+      source,
+      startedAt,
+      finishedAt,
+      error: message,
+      kind: classifyScrapeFailure(err),
+    });
+  } catch (dbErr) {
+    console.warn("[crawler] failed to persist scrape failure:", dbErr);
+  }
+}
+
 interface RunOutcome {
   ok: boolean;
   stats?: unknown;
@@ -112,13 +156,16 @@ async function execRunScrape(
       pressBatchRefreshOnly: opts.pressBatchRefreshOnly === true,
     };
     const stats = await runScrape(getDb(), options);
+    persistScrapeSuccess(source, startedAt, stats.finishedAt);
     lastResult = { startedAt, finishedAt: stats.finishedAt, ok: true, source };
     console.log(`[crawler] scrape done (${source}): ${JSON.stringify(stats)}`);
     return { ok: true, stats };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const twoFactor = err instanceof TwoFactorRequiredError;
-    lastResult = { startedAt, finishedAt: new Date().toISOString(), ok: false, source, error: message };
+    const finishedAt = new Date().toISOString();
+    persistScrapeFailure(source, startedAt, finishedAt, err, message);
+    lastResult = { startedAt, finishedAt, ok: false, source, error: message };
     console.error(`[crawler] scrape failed (${source}):`, message);
     return { ok: false, error: message, twoFactor };
   } finally {
@@ -148,11 +195,15 @@ async function execPressBatchRefresh(source: string): Promise<RunOutcome> {
     } finally {
       await closeSession(session);
     }
-    lastResult = { startedAt, finishedAt: new Date().toISOString(), ok: true, source };
+    const finishedAt = new Date().toISOString();
+    persistScrapeSuccess(source, startedAt, finishedAt);
+    lastResult = { startedAt, finishedAt, ok: true, source };
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    lastResult = { startedAt, finishedAt: new Date().toISOString(), ok: false, source, error: message };
+    const finishedAt = new Date().toISOString();
+    persistScrapeFailure(source, startedAt, finishedAt, err, message);
+    lastResult = { startedAt, finishedAt, ok: false, source, error: message };
     console.error(`[crawler] batch refresh failed (${source}):`, message);
     return { ok: false, error: message };
   } finally {

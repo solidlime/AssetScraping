@@ -25,7 +25,51 @@ export const SETTING_KEYS = {
   ssnbLoginId: "ssnb_login_id",
   ssnbPassword: "ssnb_password",
   rescrapeAt: "rescrape_at",
+  lastScrapeResult: "last_scrape_result",
 } as const;
+
+/** スクレイプ失敗の分類。バナーの文言出し分けに使う */
+export type ScrapeFailureKind = "session_expired" | "two_factor" | "login_required" | "aborted" | "other";
+
+export interface LastScrapeResult {
+  ok: boolean;
+  /** "manual" | "scheduled" | "rescrape" | "press" など呼び出し元の名前 */
+  source: string;
+  startedAt: string;
+  finishedAt: string;
+  /** 失敗時のみ。生のメッセージ */
+  error?: string;
+  /** 失敗時のみ */
+  kind?: ScrapeFailureKind;
+  /** 直近で成功した finishedAt（成功時に更新、失敗時は前回値を引き継ぐ） */
+  lastSuccessAt?: string;
+}
+
+/** 直近のスクレイプ結果。未記録・JSON 破損は null */
+export function getLastScrapeResult(db: Database): LastScrapeResult | null {
+  const raw = getSetting(db, SETTING_KEYS.lastScrapeResult);
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as LastScrapeResult;
+  } catch {
+    return null;
+  }
+}
+
+export function saveScrapeSuccess(db: Database, r: { source: string; startedAt: string; finishedAt: string }): void {
+  const result: LastScrapeResult = { ...r, ok: true, lastSuccessAt: r.finishedAt };
+  setSetting(db, SETTING_KEYS.lastScrapeResult, JSON.stringify(result));
+}
+
+export function saveScrapeFailure(
+  db: Database,
+  r: { source: string; startedAt: string; finishedAt: string; error: string; kind: ScrapeFailureKind },
+): void {
+  // 失敗しても「最後にデータが取れた時刻」は保つ（バナーに出すため）
+  const lastSuccessAt = getLastScrapeResult(db)?.lastSuccessAt;
+  const result: LastScrapeResult = { ...r, ok: false, lastSuccessAt };
+  setSetting(db, SETTING_KEYS.lastScrapeResult, JSON.stringify(result));
+}
 
 /** 一括更新を押してから再取得するまでの待ち時間（60分固定） */
 export const RESCRAPE_DELAY_MS = 60 * 60 * 1000;
