@@ -182,6 +182,14 @@ async function execRunScrape(
       pressBatchRefreshOnly: opts.pressBatchRefreshOnly === true,
     };
     const stats = await runWithSessionRetry(`scrape (${source})`, retry, () => runScrape(getDb(), options));
+    // 取得中に「更新中」の金融機関があった場合、その値は古いままなので 60 分後に取り直す。
+    // 押すだけ経路（execPressBatchRefresh）と同じ予約を、手動更新・再ログインにも張る。
+    if (stats.updatingAccounts && stats.updatingAccounts.length > 0) {
+      setRescrapeAt(getDb(), Date.now() + RESCRAPE_DELAY_MS);
+      console.log(
+        `[crawler] ${stats.updatingAccounts.length} 件が更新中のため 60 分後に再取得します: ${stats.updatingAccounts.join(", ")}`,
+      );
+    }
     // 自動リトライが起きたことを DB から判別できるようにする
     const effectiveSource = retrySource(source, retry.hit);
     persistScrapeSuccess(effectiveSource, startedAt, stats.finishedAt);

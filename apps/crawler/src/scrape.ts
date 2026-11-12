@@ -73,6 +73,7 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
     transactionsUpserted: 0,
     transactionsSkipped: 0,
     assetHistoryUpserted: 0,
+    updatingAccounts: [],
   };
 
   const session: Session = await getSession();
@@ -112,6 +113,8 @@ export async function runScrape(db: Database, options: RunScrapeOptions = {}): P
         balance: acc.status.balance,
       });
       stats.accountsUpserted++;
+      // 「更新中」の口座は古い値のまま取れる。呼び出し側が 60 分後の再取得を予約する
+      if (acc.status.status === "updating") stats.updatingAccounts.push(acc.name);
     }
 
     // 2) 保有資産（口座別残高内訳: /accounts/show/{id}）

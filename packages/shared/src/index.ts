@@ -198,6 +198,8 @@ export interface ScrapeRun {
   /** /cf で保有金融機関を解決できず捨てた行数（口座を取り違えて書かない代償） */
   transactionsSkipped: number;
   assetHistoryUpserted: number;
+  /** 取得時点でマネフォ側が「更新中」だった口座名（値が古い可能性がある） */
+  updatingAccounts: string[];
 }
 
 /** 規約遵守: ページ取得間のスリープ範囲 (ms) */
