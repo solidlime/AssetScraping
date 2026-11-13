@@ -9,6 +9,7 @@ import {
   getUpcomingWithdrawals,
   resolveDbPath,
   summarizeWithdrawalShortages,
+  todayJst,
 } from "@asset-scraping/db";
 
 /** 失敗種別の日本語ラベル（バナーと同じ語彙） */
@@ -69,11 +70,13 @@ export function withdrawalWarning(db: Database): string | null {
 
   const yen = (n: number) => `${n.toLocaleString("ja-JP")}円`;
   const total = shortfalls.reduce((sum, s) => sum + s.shortage, 0);
+  // 日数は日付同士の差で出す（現在時刻から引くと web の remainingDays と1日ずれる）
+  const todayMs = Date.parse(`${todayJst()}T00:00:00+09:00`);
   const lines = [
     `⚠ 引き落とし資金が不足しています（不足合計 ${yen(total)}）。入金か口座間の振替が必要です。`,
   ];
   for (const s of shortfalls) {
-    const days = Math.round((Date.parse(`${s.date}T00:00:00+09:00`) - Date.now()) / 86_400_000);
+    const days = Math.round((Date.parse(`${s.date}T00:00:00+09:00`) - todayMs) / 86_400_000);
     const names =
       s.items.length <= 2
         ? s.items.map((i) => i.paymentName ?? i.accountName).join(" + ")
