@@ -17,8 +17,22 @@ export function UpcomingWithdrawalsCard() {
   const alertDays = getWithdrawalAlertDays(db);
   // 行の shortage はカードと固定費で別集計なので、口座単位に合算した値で出す
   const shortages = summarizeWithdrawalShortages(upcoming);
-  const shortageByAccount = new Map(shortages.map((s) => [s.withdrawalAccountId, s.shortage]));
+  const shortageByAccount = new Map(shortages.map((s) => [s.withdrawalAccountId, s]));
   const totalShortage = shortages.reduce((sum, s) => sum + s.shortage, 0);
+
+  // 引落元口座ごとにまとめる。同じ不足額を全行に繰り返さないため
+  const groups: { id: string; name: string; items: typeof upcoming }[] = [];
+  const groupIndex = new Map<string, number>();
+  for (const item of upcoming) {
+    const id = item.withdrawalAccountId ?? "";
+    const idx = groupIndex.get(id);
+    if (idx === undefined) {
+      groupIndex.set(id, groups.length);
+      groups.push({ id, name: item.withdrawalAccountName ?? "引落元 未設定", items: [item] });
+    } else {
+      groups[idx]!.items.push(item);
+    }
+  }
 
   return (
     <Card>
@@ -26,28 +40,45 @@ export function UpcomingWithdrawalsCard() {
         <CardTitle icon={CreditCard}>引き落とし間近の予定</CardTitle>
       </CardHeader>
       <CardContent>
-        <ul className="space-y-2">
-          {upcoming.map((item) => (
-            <li
-              key={`${item.accountId}-${item.date}`}
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
-            >
-              <span className="text-muted-foreground">{item.date}</span>
-              <span className="font-semibold text-foreground">{item.paymentName ?? item.accountName}</span>
-              {item.kind === "payment" && <Badge variant="secondary">固定費</Badge>}
-              <span>{item.amount.toLocaleString("ja-JP")}円</span>
-              {item.withdrawalAccountName && <span>引き落とし元 {item.withdrawalAccountName}</span>}
-              <span className="text-xs text-muted-foreground">
-                {item.remainingDays === 0 ? "今日" : `あと${item.remainingDays}日`}
-              </span>
-              {shortageByAccount.has(item.withdrawalAccountId ?? "") && (
-                <Badge variant="warning">
-                  この口座で残高不足 {shortageByAccount.get(item.withdrawalAccountId ?? "")!.toLocaleString("ja-JP")}円
-                </Badge>
-              )}
-              {item.note && <span className="text-xs text-muted-foreground">{item.note}</span>}
-            </li>
-          ))}
+        <ul className="space-y-4">
+          {groups.map((group) => {
+            const shortage = shortageByAccount.get(group.id);
+            return (
+              <li key={group.id || "none"}>
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <span className="text-sm font-semibold text-foreground">{group.name}</span>
+                  {shortage && (
+                    <Badge variant="warning">
+                      不足 {shortage.shortage.toLocaleString("ja-JP")}円
+                    </Badge>
+                  )}
+                </div>
+                {shortage && (
+                  <p className="text-xs text-muted-foreground">
+                    残高 {shortage.balance.toLocaleString("ja-JP")}円 / 引き落とし{" "}
+                    {shortage.amount.toLocaleString("ja-JP")}円
+                  </p>
+                )}
+                <ul className="mt-1 space-y-1">
+                  {group.items.map((item) => (
+                    <li
+                      key={`${item.accountId}-${item.date}-${item.paymentName ?? ""}`}
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"
+                    >
+                      <span className="text-muted-foreground">{item.date.slice(5)}</span>
+                      <span>{item.paymentName ?? item.accountName}</span>
+                      {item.kind === "payment" && <Badge variant="secondary">固定費</Badge>}
+                      <span className="font-medium">{item.amount.toLocaleString("ja-JP")}円</span>
+                      <span className="text-xs text-muted-foreground">
+                        {item.remainingDays === 0 ? "今日" : `${item.remainingDays}日後`}
+                      </span>
+                      {item.note && <span className="text-xs text-muted-foreground">{item.note}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            );
+          })}
         </ul>
         {totalShortage > 0 && (
           <p className="mt-3 text-sm font-semibold text-yellow-700">
