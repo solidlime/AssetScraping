@@ -1,6 +1,7 @@
 /**
  * MCP サーバー定義（read-only）。
  * ツール: get_accounts / get_transactions / get_holdings / get_asset_history / get_monthly_summary
+ *       / get_account_alerts / get_financial_metrics / get_upcoming_withdrawals
  * DB は read-only 接続。更新トリガーは持たない（web UI に一元化）。
  * stdio / HTTP 両 transport から使うため、インスタンス生成を関数化している。
  */
@@ -122,6 +123,30 @@ export function createMcpServer(): McpServer {
     "財務メトリクス（貯蓄・投資・支出・成長・残高・負債・健全性スコア）を取得する",
     {},
     () => dbTool((db) => getFinancialMetrics(undefined, db)),
+  );
+
+  server.tool(
+    "get_upcoming_withdrawals",
+    "引き落とし間近の予定（クレカ・固定費）と口座ごとの資金不足をまとめて取得する",
+    {
+      alert_days: z
+        .number()
+        .int()
+        .min(1)
+        .max(60)
+        .optional()
+        .describe("引き落とし日まで何日以内を対象にするか（1〜60）。省略時は DB 設定（既定 14）"),
+    },
+    ({ alert_days }) =>
+      dbTool((db) => {
+        const upcoming = getUpcomingWithdrawals(db, { withdrawalAlertDays: alert_days });
+        const shortages = summarizeWithdrawalShortages(upcoming);
+        return {
+          totalShortage: shortages.reduce((sum, s) => sum + s.shortage, 0),
+          shortages,
+          upcoming,
+        };
+      }),
   );
 
   return server;
