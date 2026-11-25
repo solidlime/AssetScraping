@@ -45,7 +45,8 @@ services:
     volumes:
       - mfb-data:/data
     ports:
-      - "8765:8765"
+      # ホスト 2765 → コンテナ 8765（本番の公開ポートに揃える）
+      - "2765:8765"
     depends_on:
       - crawler
     restart: unless-stopped

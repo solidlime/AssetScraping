@@ -123,7 +123,7 @@ C/F は月次の収支推移とカテゴリ別の内訳、取引一覧。
 | `DB_PATH` | `./.data/asset-scraping.db` | SQLite のパス。compose では `/data/asset-scraping.db` |
 | `AUTH_STATE_PATH` | `/data/auth-state.json` | Playwright の storageState |
 | `CRAWLER_URL` | `http://crawler:8766` | web から crawler の手動更新 API を呼ぶ先 |
-| `PORT` | crawler `8766` / web `8765` / mcp `26280` | 待ち受けポート |
+| `PORT` | crawler `8766` / web `8765`（ホスト公開は `2765`） / mcp `26280` | 待ち受けポート |
 | `MCP_TRANSPORT` | `stdio` | `http` にすると Streamable HTTP で常駐する |
 | `SCRAPE_MODE` | 未設定 | `history` を指定しても現行 UI では通常モードと同じ動きになる |
 
@@ -182,8 +182,8 @@ docker build -f apps/mcp/Dockerfile -t asset-scraping-mcp .
 flowchart LR
   SSNB[ssnb.x.moneyforward.com]
   subgraph compose
-    crawler["crawler :8766<br/>Playwright + cron"]
-    web["web :8765<br/>Next.js"]
+    crawler["crawler :8766<br/>Playwright + プロセス内スケジューラ"]
+    web["web :2765→8765<br/>Next.js"]
     mcp["mcp :26280<br/>Streamable HTTP"]
     vol[("mfb-data<br/>SQLite / auth-state.json")]
   end
