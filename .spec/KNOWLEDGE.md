@@ -65,3 +65,6 @@
 - `summarizeWithdrawals` が落とすのは `withdrawalAccountId` か `balance` が undefined の行だけ。前者は /accounts の「引き落とし口座を解決できません」カードで回収され、後者（source 行が無い固定費）は旧カードも `buildScheduledPaymentAlerts` の `if (!row) continue` で黙っていた＝挙動等価
 - **`/accounts` の固定費カードは不要**（グループ内に `kind="payment"` 行として出る）。カード削除で不足の出所が `getUpcomingWithdrawals` 1 経路に統一された。警告バッジ `alertCount` は `getAccountAlerts` の口座 ID 集合でカード ID も数えるため、グループ数（口座単位）とは粒度が違う（1口座2カードで +2 / 1）
 - 検証は「シード DB + `next dev` で実描画」が最短。行の有無は `document.body.innerText` で機械的に確かめられる
+- **MCP 側も同じ `balanceAfter` を出す**: `apps/mcp/src/tools.ts` の `withdrawalWarning` は警告行を `残高 / 引き落とし後` の2値にし（不足 = -引き落とし後 なので行から落として先頭の不足合計へ集約）、`get_upcoming_withdrawals` は `accounts`（引落元口座すべて、`balanceAfter` 付き）を返す。`shortages` は `accounts.filter(shortage > 0)` の純フィルタなので二重の真実ではない（後方互換で残置）
+- **本番の URL は compose.yml と違う**: Portainer stack 52（`asset-scraping`, endpoint 2）は web をホスト **2765** で公開している（リポジトリの compose.yml は 8765）。デプロイ確認は `http://nas:2765/accounts`、crawler は 8766、mcp は `http://nas:26280/mcp`
+- デプロイは CI（`docker` workflow）が終わってから `portainer_stack_update(stack_id=52, pull_image=true)`。成功判定はコンテナ `created` の更新と `com.docker.compose.image` / `org.opencontainers.image.revision` の一致（inspect で確認）。`portainer_image_inspect` は 403 で使えない
