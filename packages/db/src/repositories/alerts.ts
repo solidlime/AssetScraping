@@ -380,6 +380,8 @@ export interface WithdrawalShortage {
   amount: number;
   balance: number;
   shortage: number;
+  /** 引き落とし後の残高（`balance - amount`。口座単位の合算額で引く） */
+  balanceAfter: number;
   /** この口座の予定日のうち最も早い日 (YYYY-MM-DD) */
   date: string;
   items: UpcomingWithdrawal[];
@@ -418,6 +420,7 @@ export function summarizeWithdrawals(items: UpcomingWithdrawal[]): WithdrawalSho
       amount: e.amount,
       balance: e.balance,
       shortage: Math.max(0, e.amount - e.balance),
+      balanceAfter: e.balance - e.amount,
       date: e.date,
       items: e.items,
     }))

@@ -819,7 +819,7 @@ describe("getUpcomingWithdrawals / 固定費", () => {
     seedCard("card-1", "カード", { amount: 50_000, date: "2026-10-26", withdrawalAccountId: "bank-1" });
     const summaries = summarizeWithdrawals(getUpcomingWithdrawals(db, { today: TODAY }));
     expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toMatchObject({ balance: 200_000, amount: 50_000, shortage: 0 });
+    expect(summaries[0]).toMatchObject({ balance: 200_000, amount: 50_000, shortage: 0, balanceAfter: 150_000 });
     expect(summarizeWithdrawalShortages(getUpcomingWithdrawals(db, { today: TODAY }))).toEqual([]);
   });
 });

@@ -11,7 +11,7 @@ export function WithdrawalGroups({ summaries }: { summaries: WithdrawalShortage[
     <ul className="space-y-4">
       {summaries.map((summary) => {
         // 引き落とし後残高は口座単位の合算額で引く（行ごとに引くと残高を二重に使う）
-        const after = summary.balance - summary.amount;
+        const after = summary.balanceAfter;
         return (
           <li key={summary.withdrawalAccountId}>
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">

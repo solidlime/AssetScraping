@@ -82,7 +82,7 @@ export function withdrawalWarning(db: Database): string | null {
         ? s.items.map((i) => i.paymentName ?? i.accountName).join(" + ")
         : `${s.items[0]!.paymentName ?? s.items[0]!.accountName} ほか${s.items.length - 1}件`;
     lines.push(
-      `  ${s.date}（${days}日後）${s.withdrawalAccountName}: 予定 ${yen(s.amount)}（${names}） / 残高 ${yen(s.balance)} / 不足 ${yen(s.shortage)}`,
+      `  ${s.date}（${days}日後）${s.withdrawalAccountName}: 予定 ${yen(s.amount)}（${names}） / 残高 ${yen(s.balance)} / 引き落とし後 ${yen(s.balanceAfter)}`,
     );
   }
   return lines.join("\n");

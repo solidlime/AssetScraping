@@ -17,8 +17,7 @@ import {
   getMonthlySummary,
   getTransactions,
   getUpcomingWithdrawals,
-  getWithdrawalAlertDays,
-  summarizeWithdrawalShortages,
+  summarizeWithdrawals,
 } from "@asset-scraping/db";
 import { dbTool } from "./tools.ts";
 
@@ -127,7 +126,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     "get_upcoming_withdrawals",
-    "引き落とし間近の予定（クレカ・固定費）と口座ごとの資金不足をまとめて取得する",
+    "引き落とし間近の予定（クレカ・固定費）と口座ごとの引き落とし後残高をまとめて取得する",
     {
       alert_days: z
         .number()
@@ -140,10 +139,13 @@ export function createMcpServer(): McpServer {
     ({ alert_days }) =>
       dbTool((db) => {
         const upcoming = getUpcomingWithdrawals(db, { withdrawalAlertDays: alert_days });
-        const shortages = summarizeWithdrawalShortages(upcoming);
+        const accounts = summarizeWithdrawals(upcoming);
+        const shortages = accounts.filter((s) => s.shortage > 0);
         return {
           totalShortage: shortages.reduce((sum, s) => sum + s.shortage, 0),
           shortages,
+          // 余裕のある口座も含む全口座（balanceAfter 付き）
+          accounts,
           upcoming,
         };
       }),

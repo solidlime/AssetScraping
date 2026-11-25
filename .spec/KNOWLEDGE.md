@@ -59,7 +59,7 @@
 - **drizzle-kit 0.30 は自己参照 FK の `ON DELETE` 節を `ALTER TABLE ... ADD COLUMN` DDL に出力しない（実測）**。`meta/0007_snapshot.json` は `onDelete: "set null"` を宣言しているのに、生成された `0007_overjoyed_bloodstorm.sql` は `REFERENCES accounts(id)` 止まりだった。SQLite 自体は ADD COLUMN の `ON DELETE SET NULL` を実効化する（SQLite 3.53.4 で `PRAGMA foreign_key_list` = `SET NULL`、親 DELETE で子が NULL になることを実測）ので、必要なら migration SQL を手で補う
 
 ## 技術的な知見（引き落とし後残高・口座タブUI統一）
-- **引き落とし後残高は口座単位の合算額で引く**（`summary.balance - summary.amount`）。行単位で `balance - item.amount` を出すと同一口座の残高を二重に使う。`UpcomingWithdrawal.shortage` も行単位では過小評価になる（カードと固定費で別集計）ので、表示は必ず `summarizeWithdrawals` の口座単位値を使う
+- **引き落とし後残高は口座単位の合算額で引く**（`WithdrawalShortage.balanceAfter`。定義は `summarizeWithdrawals` の `balance - amount` 1箇所だけ）。行単位で `balance - item.amount` を出すと同一口座の残高を二重に使う。`UpcomingWithdrawal.shortage` も行単位では過小評価になる（カードと固定費で別集計）ので、表示は必ず `summarizeWithdrawals` の口座単位値を使う
 - **`summarizeWithdrawals` は不足なしも `shortage: 0` で返す**（`summarizeWithdrawalShortages` はその `.filter(shortage > 0)`）。MCP 2 箇所は旧関数名のままで互換
 - **UI 共通部品は `summaries` 単一 prop で足りる**: `WithdrawalShortage` が `items` / `balance` / `amount` / `shortage` / `withdrawalAccountName` を全部持つため、`items` を別 prop で受けて再グループ化するのは二重実装（REVIEW で BLOCK。`apps/web/src/lib/withdrawal-groups.ts` は削除した）
 - `summarizeWithdrawals` が落とすのは `withdrawalAccountId` か `balance` が undefined の行だけ。前者は /accounts の「引き落とし口座を解決できません」カードで回収され、後者（source 行が無い固定費）は旧カードも `buildScheduledPaymentAlerts` の `if (!row) continue` で黙っていた＝挙動等価
