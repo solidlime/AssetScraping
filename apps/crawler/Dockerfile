@@ -1,16 +1,13 @@
 # syntax=docker/dockerfile:1
-# ssnb crawler: Playwright chromium + supercronic
+# ssnb crawler: Playwright chromium
 FROM node:24-bookworm-slim AS base
 ENV NODE_ENV=production
 RUN corepack enable
 
-# Playwright chromium の依存ライブラリ + supercronic
+# Playwright chromium の依存ライブラリ（+ noVNC 用の X まわり）
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl xz-utils \
       xvfb x11vnc websockify novnc \
-    && curl -fsSL -o /usr/local/bin/supercronic \
-      https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-amd64 \
-    && chmod +x /usr/local/bin/supercronic \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -50,12 +47,11 @@ COPY --from=build /app/packages/db/drizzle /app/packages/db/drizzle
 COPY --from=build /app/packages/shared/src /app/packages/shared/src
 COPY --from=build /app/packages/date-utils/src /app/packages/date-utils/src
 COPY --from=build /app/tsconfig.base.json /app/tsconfig.base.json
-COPY apps/crawler/docker/crontab /app/docker/crontab
 COPY apps/crawler/docker/login-web.sh /app/docker/login-web.sh
 RUN chmod +x /app/docker/login-web.sh
 ENV DB_PATH=/data/asset-scraping.db \
     AUTH_STATE_PATH=/data/auth-state.json \
     PORT=8766
 EXPOSE 8766 6080
-# 常駐: 手動更新 API。cron は supercronic が index.ts を叩く
-CMD ["sh", "-c", "supercronic /app/docker/crontab & cd /app/apps/crawler && exec node_modules/.bin/tsx src/server.ts"]
+# 常駐: 手動更新 API + 定期更新（プロセス内 setInterval。cron は使わない）
+CMD ["sh", "-c", "cd /app/apps/crawler && exec node_modules/.bin/tsx src/server.ts"]
