@@ -386,11 +386,11 @@ export interface WithdrawalShortage {
 }
 
 /**
- * 不足している口座だけを返す（不足なしは含めない）。
+ * 口座ごとに金額を合算してから残高と比べる（**不足なしも shortage: 0 で返す**）。
  * `UpcomingWithdrawal.shortage` はカードと固定費で別々に計算されるため、行単位で足すと
- * 同一口座の不足を過小評価する。ここで口座ごとに金額を合算してから残高と比べる。
+ * 同一口座の不足を過小評価する。UI の「引き落とし後の残高」はこの合算額で引く。
  */
-export function summarizeWithdrawalShortages(items: UpcomingWithdrawal[]): WithdrawalShortage[] {
+export function summarizeWithdrawals(items: UpcomingWithdrawal[]): WithdrawalShortage[] {
   const byAccount = new Map<
     string,
     { amount: number; balance: number; date: string; name: string; items: UpcomingWithdrawal[] }
@@ -421,8 +421,12 @@ export function summarizeWithdrawalShortages(items: UpcomingWithdrawal[]): Withd
       date: e.date,
       items: e.items,
     }))
-    .filter((s) => s.shortage > 0)
     .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : b.shortage - a.shortage));
+}
+
+/** 不足している口座だけを返す（不足なしは含めない） */
+export function summarizeWithdrawalShortages(items: UpcomingWithdrawal[]): WithdrawalShortage[] {
+  return summarizeWithdrawals(items).filter((s) => s.shortage > 0);
 }
 
 export function getUpcomingWithdrawals(

@@ -9,6 +9,7 @@ import {
   getAccountAlerts,
   getUpcomingWithdrawals,
   summarizeWithdrawalShortages,
+  summarizeWithdrawals,
   getWithdrawalAccountState,
   type AccountAlert,
 } from "../src/repositories/alerts.js";
@@ -811,5 +812,14 @@ describe("getUpcomingWithdrawals / 固定費", () => {
     expect(shortages[0]!.amount).toBe(50_000);
     expect(shortages[0]!.shortage).toBe(40_000);
     expect(shortages[0]!.items).toHaveLength(2);
+  });
+
+  it("summarizeWithdrawals は不足の無い口座も shortage: 0 で返す（引き落とし後の残高表示用）", () => {
+    seedAccount("bank-1", "青空銀行", "青空銀行", 200_000);
+    seedCard("card-1", "カード", { amount: 50_000, date: "2026-10-26", withdrawalAccountId: "bank-1" });
+    const summaries = summarizeWithdrawals(getUpcomingWithdrawals(db, { today: TODAY }));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ balance: 200_000, amount: 50_000, shortage: 0 });
+    expect(summarizeWithdrawalShortages(getUpcomingWithdrawals(db, { today: TODAY }))).toEqual([]);
   });
 });
