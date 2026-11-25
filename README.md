@@ -132,7 +132,6 @@ C/F は月次の収支推移とカテゴリ別の内訳、取引一覧。
 - 設定タブの定期更新時刻（既定 `06:00`、`app_settings.scheduled_refresh_time`）になると、crawler が ssnb の一括更新ボタンを押す。押した回はまだ「更新中」なので 60 分後に取り直し、12 時間後にもう一度取る。
 - 時刻は 30 秒おきに DB から読み直すので、UI で変えた値は次の tick で効く。
 
-`apps/crawler/docker/crontab` の supercronic 用エントリもあるが、取得は上のスケジューラが担っている。
 
 ## MCP サーバー
 
@@ -213,7 +212,7 @@ docker pull ghcr.io/solidlime/asset-scraping-mcp:latest
 
 ## 制限
 
-- 取得のトリガーは crawler 内のスケジューラ。`apps/crawler/docker/crontab` の supercronic 用エントリは残っているが、パスが現行レイアウトと合っていない。
+- 取得のトリガーは crawler プロセス内のスケジューラ（cron は廃止）。コンテナが止まっている間は定期更新も止まる。
 - ssnb の web 画面に依存している。画面構成やセレクタが変わるとパースが落ちる。
 - 配当の銘柄解決は保有資産のコードに依存する。コードが取れない投信などは未解決のまま残るので、配当ページで手動登録する。
 - Docker イメージは amd64 のみ。`.github/workflows/docker.yml` にマルチアーキのビルドは無い。

@@ -1,6 +1,6 @@
 /**
  * 定期更新スケジューラ。
- * docker crontab は動的変更できないため、サーバ内 setInterval で時刻到達判定し、
+ * 時刻を UI から動的に変えられるよう、サーバ内 setInterval で時刻到達判定し、
  * 設定時刻 (app_settings.scheduled_refresh_time, JST "HH:MM") は毎 tick DB から再読込する。
  */
 export interface HhMm {

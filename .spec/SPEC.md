@@ -31,7 +31,7 @@
   - 誤警告より無警告を選ぶ: 金額・期日のどちらかが欠けたら警告しない
 
 ## 非機能要件
-- パフォーマンス: cron 1日2回（6:30/15:30 JST, TZ=Asia/Tokyo）+ 手動更新。ページ取得間にスリープ（規約 13条(41)(43) 対策）
+- パフォーマンス: 定期更新は crawler プロセス内スケジューラ（既定 06:00 JST + 60分後/12時間後の再取得）+ 手動更新。ページ取得間にスリープ（規約 13条(41)(43) 対策）
 - セキュリティ: 認証情報は .env / compose env_file でコンテナへ注入。storageState も volume 内に封入。MCP は read-only ヒント付き
 - 制約条件: better-sqlite3 のため Debian bookworm-slim ベース。crawler イメージに Playwright+Chromium、mcp イメージは Chromium 不要で軽量
 

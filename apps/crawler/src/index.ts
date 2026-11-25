@@ -1,6 +1,6 @@
 /**
- * cron 用エントリポイント（supercronic から 6:30 / 15:30 JST に起動）。
- * 1 回スクレイプして終了する。マイグレーションは事前に db:migrate を実行する前提。
+ * 1 回だけスクレイプして終了する手動エントリポイント（`pnpm --filter @asset-scraping/crawler start`）。
+ * 定期更新は server.ts のプロセス内スケジューラが担う（cron は廃止）。
  */
 import { createDb, resolveDbPath } from "@asset-scraping/db";
 import { runScrape } from "./scrape.js";

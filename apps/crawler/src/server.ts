@@ -7,7 +7,7 @@
  * - GET/POST/PUT/DELETE /fixed-costs → 固定費（家賃・電気代等）の CRUD。手動登録専用
  * - GET  /health   → 稼働状態
  * web ダッシュボードの設定タブ・手動更新ボタンから /api/* を経由して呼ばれる。
- * 定期更新は Docker crontab の代わりにこのプロセス内 setInterval ループで実施。
+ * 定期更新はこのプロセス内 setInterval ループで実施（cron は廃止）。
  * 設定時刻 (app_settings.scheduled_refresh_time) は毎 tick DB から読み直すため、
  * UI 変更が即反映される。到達判定は既存の純粋関数 nextOccurrenceJst (scheduler.ts) を使用。
  */

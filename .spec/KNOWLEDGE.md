@@ -11,7 +11,7 @@
 ## 調査・リサーチ結果
 ### hiroppy/mf-dashboard（実コード確認済み）
 - 構成: pnpm+Turborepo monorepo / TS ESM / Node 24 / crawler(Playwright chromium + drizzle-orm + SQLite WAL) / web(Next.js 16 + React 19 + Tailwind 4 + recharts, :8765) / mcp(@modelcontextprotocol/sdk, stdio, read-only SQLite 照会, readOnlyHint) / crawler が :8766 で手動更新 HTTP API 兼務
-- cron: supercronic で 6:30 / 15:30 JST（docker/crawler/crontab）
+- 定期更新: crawler プロセス内スケジューラ（`startScheduler`）。cron/supercronic は 2026-11-26 に廃止
 - 認証: Playwright で MFID ログイン → storageState(Cookie) を auth-state.json に保存・再利用、失効時のみフルログイン。OTP は 1Password SDK で自動入力
 - 取得データ: 口座一覧・残高/保有資産(銘柄・数量・評価額・平均単価・含み損益)/資産推移(日次+カテゴリ別)/取引履歴(月次, 通常直近2ヶ月, SCRAPE_MODE=history で遡行)/予算/月次サマリー/予定引落
 - スキーマ: accounts / account_statuses / holdings / holding_values / daily_snapshots / transactions / cash_flow_periods / asset_history / spending_targets / groups / group_accounts / institution_categories 等
